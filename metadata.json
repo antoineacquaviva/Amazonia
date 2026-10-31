@@ -1,0 +1,6 @@
+{
+  "name": "Amazonia : Laboratoire de Simulation & Équilibrage",
+  "description": "Simulateur Monte-Carlo, évaluation des 4 critères de game design et vérificateur formel d'invariants pour le jeu coopératif Amazonia : Dernier Rempart.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,23 @@
+# ANNEXE TECHNIQUE : CONTRAT D'INTÉGRATION AU PORTAIL « ATELIER CONCEPTION JEU »
+*(Document complémentaire au cahier des charges fonctionnel — Règles techniques obligatoires pour le déploiement)*
+
+## 1. Contexte d'exécution (Double Environnement)
+Cette application doit fonctionner de manière transparente dans **deux environnements** sans aucune modification manuelle du code entre les deux :
+1. **Aperçu Google AI Studio (Preview Sandbox)** : servie à la racine `/` sur le port `3000`.
+2. **Production sur VM Oracle (`https://atelierconceptionjeu.fr/<sous-chemin>/`)** :
+   - Déployée dans `/srv/jeu/<nom-outil>/` et compilée avec `npx vite build --base=/<sous-chemin>/`.
+   - Exécutée via un service `systemd` avec `NODE_ENV=production` et un port dédié fourni par la variable d'environnement `PORT` (ex: `8080`, `8082`, `8084`... car le port `3000` de la VM est déjà occupé par le Portail Maître).
+   - Placée derrière un reverse-proxy **Caddy** configuré avec `handle_path /<sous-chemin>/*` (Caddy retire le préfixe `/<sous-chemin>` avant de transmettre la requête HTTP à `127.0.0.1:<PORT>`).
+
+---
+
+## 2. Règles d'architecture obligatoires à respecter dans le code
+
+### A. Port d'écoute du serveur (`server.ts`) — INTERDICTION de figer le port 3000
+Si l'application utilise un backend Express (`server.ts`), le port **doit obligatoirement** lire `process.env.PORT` avec repli sur `3000` :
+```ts
+const PORT = Number(process.env.PORT) || 3000;
+// ...
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Serveur actif sur http://0.0.0.0:${PORT}`);
+});
