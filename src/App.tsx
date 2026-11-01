@@ -2,23 +2,27 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   CampaignConfig,
   CampaignRecord,
+  EditionPreset,
+  PinnedSeed,
   ThemeVocabularyMode,
 } from './sim/types';
-import { DICTIONARIES } from './sim/i18n';
+import { BUILTIN_EDITIONS, DICTIONARIES } from './sim/i18n';
 import {
   controlCampaign,
   createCampaign,
   fetchCampaigns,
+  fetchEditions,
+  fetchPinnedSeeds,
   removeCampaign,
 } from './api';
 import { DashboardView } from './components/DashboardView';
 import { EvaluationBuilderView } from './components/EvaluationBuilderView';
+import { ConservatoryView } from './components/ConservatoryView';
 import { StressTestView } from './components/StressTestView';
 import { JournalsAndExportView } from './components/JournalsAndExportView';
-import { ReferenceAndI18nView } from './components/ReferenceAndI18nView';
 import { Sun, Moon } from 'lucide-react';
 
-type ActiveTab = 'dashboard' | 'builder' | 'stress' | 'journals' | 'reference';
+type ActiveTab = 'dashboard' | 'builder' | 'conservatory' | 'stress' | 'journals';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -26,6 +30,8 @@ export default function App() {
   const [darkMode, setDarkMode] = useState<boolean>(false);
 
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
+  const [editions, setEditions] = useState<EditionPreset[]>(BUILTIN_EDITIONS);
+  const [pinnedSeeds, setPinnedSeeds] = useState<PinnedSeed[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
     null
   );
@@ -52,9 +58,23 @@ export default function App() {
     }
   }, []);
 
+  const loadConservatory = useCallback(async () => {
+    try {
+      const [eds, seeds] = await Promise.all([
+        fetchEditions(),
+        fetchPinnedSeeds(),
+      ]);
+      setEditions(eds);
+      setPinnedSeeds(seeds);
+    } catch (err: any) {
+      console.error('Erreur chargement conservatoire :', err);
+    }
+  }, []);
+
   useEffect(() => {
     loadCampaigns();
-  }, [loadCampaigns]);
+    loadConservatory();
+  }, [loadCampaigns, loadConservatory]);
 
   // Rafraîchissement automatique rapide tant qu'au moins une campagne tourne en arrière-plan
   useEffect(() => {
@@ -138,7 +158,7 @@ export default function App() {
                 : ''
             }`}
           >
-            Tableau de Bord
+            Tableau & Diagnostics
           </a>
           <a
             href="#builder"
@@ -152,7 +172,21 @@ export default function App() {
                 : ''
             }`}
           >
-            Campagne Équilibrage
+            Test Croisé & Variantes
+          </a>
+          <a
+            href="#conservatory"
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveTab('conservatory');
+            }}
+            className={`hover:text-slate-900 dark:hover:text-slate-100 transition-colors whitespace-nowrap shrink-0 ${
+              activeTab === 'conservatory'
+                ? 'text-slate-900 dark:text-slate-100 underline underline-offset-8 decoration-2 decoration-emerald-600'
+                : ''
+            }`}
+          >
+            Conservatoire & Rejeu
           </a>
           <a
             href="#stress"
@@ -180,21 +214,7 @@ export default function App() {
                 : ''
             }`}
           >
-            Journaux & Export IA
-          </a>
-          <a
-            href="#reference"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('reference');
-            }}
-            className={`hover:text-slate-900 dark:hover:text-slate-100 transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'reference'
-                ? 'text-slate-900 dark:text-slate-100 underline underline-offset-8 decoration-2 decoration-emerald-600'
-                : ''
-            }`}
-          >
-            Dictionnaire & Critères
+            Journaux & Référence
           </a>
         </nav>
 
@@ -204,7 +224,7 @@ export default function App() {
             onClick={() => setActiveTab('builder')}
             className="px-4 py-2 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
-            Nouvelle Campagne
+            Nouveau Test Croisé
           </button>
         </div>
       </header>
@@ -212,13 +232,13 @@ export default function App() {
       {/* Barre d'Outils Contextuelle de l'Espace de Travail (Sous le pli du Header) */}
       <div className="px-6 py-2.5 bg-slate-100/80 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs">
         <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-400">
-          <span>Portail Atelier Conception Jeu</span>
+          <span>Portail Atelier Conception Jeu (v2.0)</span>
           <span aria-hidden="true">·</span>
-          <span>Moteur symétrique {dict['board.villain.main']}</span>
+          <span>6 Interrupteurs V1↔V2 (64 hybrides)</span>
           <span aria-hidden="true">·</span>
           <span className="font-mono tabular-nums">
-            {campaigns.length} campagne(s) enregistrée(s)
-            {runningCount > 0 ? ` (${runningCount} en cours d'exécution)` : ''}
+            {editions.length} éditions · {campaigns.length} campagnes · {pinnedSeeds.length} graines épinglées
+            {runningCount > 0 ? ` (${runningCount} en cours)` : ''}
           </span>
         </div>
 
@@ -230,11 +250,11 @@ export default function App() {
               onChange={(e) => setActiveTab(e.target.value as ActiveTab)}
               className="px-2 py-1 text-xs bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              <option value="dashboard">Tableau de Bord</option>
-              <option value="builder">Campagne Équilibrage</option>
+              <option value="dashboard">Tableau & Diagnostics</option>
+              <option value="builder">Test Croisé & Variantes</option>
+              <option value="conservatory">Conservatoire & Rejeu</option>
               <option value="stress">Stress-Test VM</option>
-              <option value="journals">Journaux & Export IA</option>
-              <option value="reference">Dictionnaire & Critères</option>
+              <option value="journals">Journaux & Référence</option>
             </select>
           </div>
 
@@ -305,13 +325,30 @@ export default function App() {
             onControlCampaign={handleControlCampaign}
             onDeleteCampaign={handleDeleteCampaign}
             onNavigateTab={setActiveTab}
+            onEditionSaved={loadConservatory}
             vocabulary={vocabulary}
           />
         )}
 
         {activeTab === 'builder' && (
           <EvaluationBuilderView
+            editions={editions}
             onLaunchCampaign={handleLaunchCampaign}
+            vocabulary={vocabulary}
+          />
+        )}
+
+        {activeTab === 'conservatory' && (
+          <ConservatoryView
+            editions={editions}
+            pinnedSeeds={pinnedSeeds}
+            campaigns={campaigns}
+            onRefreshConservatory={loadConservatory}
+            onSelectCampaignAndOpenDashboard={(id) => {
+              setSelectedCampaignId(id);
+              setActiveTab('dashboard');
+            }}
+            onDeleteCampaign={handleDeleteCampaign}
             vocabulary={vocabulary}
           />
         )}
@@ -331,14 +368,9 @@ export default function App() {
         {activeTab === 'journals' && (
           <JournalsAndExportView
             campaigns={campaigns}
+            editions={editions}
             selectedCampaign={selectedCampaign}
             onSelectCampaign={(id) => setSelectedCampaignId(id)}
-            vocabulary={vocabulary}
-          />
-        )}
-
-        {activeTab === 'reference' && (
-          <ReferenceAndI18nView
             vocabulary={vocabulary}
             onChangeVocabulary={setVocabulary}
           />
@@ -348,7 +380,7 @@ export default function App() {
       {/* Pied de page sobre */}
       <footer className="px-6 py-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-4">
         <div>
-          Simulateur & Vérificateur Formel — « {dict['game.title']} »
+          Laboratoire de Simulation, d’Ablation Croisée & Conservatoire v2.0 — « {dict['game.title']} »
         </div>
         <div>
           Compatible Aperçu AI Studio & VM Oracle (Atelier Conception Jeu)

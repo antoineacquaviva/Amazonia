@@ -2,15 +2,15 @@ import {
   BotProfileId,
   CampaignConfig,
   CampaignRecord,
+  EditionPreset,
   GameParameters,
+  MechanicalSwitches,
+  PinnedSeed,
+  SideBySideComparisonResult,
   SingleGameResult,
   ThemeVocabularyMode,
 } from './sim/types';
 
-/**
- * Construit une URL d'API relative compatible à la fois avec l'aperçu AI Studio (/)
- * et le déploiement sur VM Oracle derrière Caddy (/<sous-chemin>/).
- */
 export function buildApiUrl(endpoint: string): string {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
   return `./${cleanEndpoint}`;
@@ -74,6 +74,86 @@ export async function simulateSingleGameTrace(payload: {
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error('Échec de la simulation unitaire');
+  return res.json();
+}
+
+// Niveau 1 du Conservatoire : Éditions
+export async function fetchEditions(): Promise<EditionPreset[]> {
+  const res = await fetch(buildApiUrl('api/editions'));
+  if (!res.ok) throw new Error('Erreur lors de la récupération des éditions');
+  return res.json();
+}
+
+export async function saveEditionPreset(payload: {
+  id?: string;
+  name: string;
+  version?: string;
+  description?: string;
+  switches: MechanicalSwitches;
+  defaultParams?: Partial<GameParameters>;
+}): Promise<EditionPreset> {
+  const res = await fetch(buildApiUrl('api/editions'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Erreur lors de la sauvegarde de l’édition');
+  }
+  return res.json();
+}
+
+export async function removeEditionPreset(id: string): Promise<void> {
+  const res = await fetch(buildApiUrl(`api/editions/${encodeURIComponent(id)}`), {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Impossible de supprimer cette édition');
+}
+
+// Niveau 3 du Conservatoire : Graines Épinglées & Rejeu Côte-à-Côte
+export async function fetchPinnedSeeds(): Promise<PinnedSeed[]> {
+  const res = await fetch(buildApiUrl('api/seeds'));
+  if (!res.ok) throw new Error('Erreur lors de la récupération des graines épinglées');
+  return res.json();
+}
+
+export async function savePinnedSeedApi(
+  payload: Partial<PinnedSeed> & { seed: number; title: string }
+): Promise<PinnedSeed> {
+  const res = await fetch(buildApiUrl('api/seeds'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Impossible d’épingler la graine');
+  return res.json();
+}
+
+export async function removePinnedSeedApi(id: string): Promise<void> {
+  const res = await fetch(buildApiUrl(`api/seeds/${encodeURIComponent(id)}`), {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Impossible de supprimer la graine');
+}
+
+export async function compareSeedSideBySide(payload: {
+  seed: number;
+  editionAId?: string;
+  editionBId?: string;
+  paramsA?: GameParameters;
+  paramsB?: GameParameters;
+  editionAName?: string;
+  editionBName?: string;
+  botProfile?: BotProfileId;
+  vocabulary?: ThemeVocabularyMode;
+}): Promise<SideBySideComparisonResult> {
+  const res = await fetch(buildApiUrl('api/compare-seed'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Échec du rejeu comparatif côte-à-côte');
   return res.json();
 }
 

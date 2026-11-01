@@ -1,21 +1,24 @@
 import React, { useState } from 'react';
 import {
   CampaignRecord,
-  TacticId,
   ThemeVocabularyMode,
   VariantEvaluationResult,
 } from '../sim/types';
-import { DICTIONARIES, TACTIC_DESCRIPTIONS } from '../sim/i18n';
-import { getJsonExportUrl, getMarkdownExportUrl } from '../api';
+import { SWITCH_KEYS, SWITCH_META, TACTIC_DESCRIPTIONS } from '../sim/i18n';
 import {
+  getJsonExportUrl,
+  getMarkdownExportUrl,
+  saveEditionPreset,
+} from '../api';
+import {
+  AlertTriangle,
+  BookmarkPlus,
+  Clock,
   Download,
   Pause,
   Play,
   Square,
   Trash2,
-  FileText,
-  ArrowUpRight,
-  Sliders,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -25,30 +28,10 @@ interface DashboardViewProps {
   onControlCampaign: (id: string, action: 'pause' | 'resume' | 'stop') => void;
   onDeleteCampaign: (id: string) => void;
   onNavigateTab: (
-    tab: 'dashboard' | 'builder' | 'stress' | 'journals' | 'reference'
+    tab: 'dashboard' | 'builder' | 'conservatory' | 'stress' | 'journals'
   ) => void;
+  onEditionSaved?: () => Promise<void>;
   vocabulary: ThemeVocabularyMode;
-}
-
-const ALL_TACTICS: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
-
-function formatCriterionStatus(score: number): { label: string; colorClass: string } {
-  if (score >= 75) {
-    return {
-      label: 'Optimal',
-      colorClass: 'text-emerald-700 dark:text-emerald-400 font-semibold',
-    };
-  }
-  if (score >= 55) {
-    return {
-      label: 'Équilibré',
-      colorClass: 'text-amber-700 dark:text-amber-400 font-semibold',
-    };
-  }
-  return {
-    label: 'À ajuster',
-    colorClass: 'text-red-700 dark:text-red-400 font-semibold',
-  };
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -58,109 +41,116 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onControlCampaign,
   onDeleteCampaign,
   onNavigateTab,
-  vocabulary,
+  onEditionSaved,
 }) => {
-  const dict = DICTIONARIES[vocabulary];
-  const [selectedVariantIdx, setSelectedVariantIdx] = useState<number>(0);
-  const [selectedTableIdx, setSelectedTableIdx] = useState<number>(0);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(
+    null
+  );
+  const [savingAsEdition, setSavingAsEdition] = useState(false);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
   if (!selectedCampaign) {
     return (
-      <div className="p-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-center">
-        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-8 text-center space-y-4">
+        <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
           Aucune campagne sélectionnée
         </h2>
-        <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 max-w-xl mx-auto">
-          Lancez une nouvelle campagne multi-variantes ou un stress-test asynchrone pour analyser l’équilibrage du jeu.
+        <p className="text-xs text-slate-500">
+          Lancez un nouveau Test Croisé / Ablation A/B ou consultez le Conservatoire.
         </p>
         <button
           onClick={() => onNavigateTab('builder')}
-          className="px-4 py-2 text-sm font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors"
+          className="px-4 py-2 text-xs font-semibold text-white bg-emerald-700 rounded-md"
         >
-          Configurer une campagne
+          Configurer un Test Croisé
         </button>
       </div>
     );
   }
 
-  const variants: VariantEvaluationResult[] = selectedCampaign.variantResults || [];
-  const safeVarIdx =
-    selectedVariantIdx < variants.length ? selectedVariantIdx : 0;
-  const activeVariant = variants[safeVarIdx] || null;
+  const variants = selectedCampaign.variantResults || [];
+  const activeVariant: VariantEvaluationResult | null =
+    variants.find((v) => v.variantId === selectedVariantId) ||
+    variants[0] ||
+    null;
 
-  const tables = activeVariant ? activeVariant.tableSummaries : [];
-  const safeTableIdx =
-    selectedTableIdx < tables.length ? selectedTableIdx : 0;
-  const activeTable = tables[safeTableIdx] || null;
+  // Variantes triées par note globale décroissante
+  const sortedVariants = [...variants].sort(
+    (a, b) => b.criteria.overallDesignScore - a.criteria.overallDesignScore
+  );
 
-  const pct =
-    selectedCampaign.progress.totalTargetGames > 0
-      ? Math.min(
-          100,
-          (selectedCampaign.progress.completedGames /
-            selectedCampaign.progress.totalTargetGames) *
-            100
-        )
-      : 100;
+  // Top 10 des "Cocktails Minimalistes" (peu d'interrupteurs modifiés mais fort gain)
+  const baseVariantA = variants.find(
+    (v) => v.ablationCategory === 'BASE_EDITION_A'
+  );
+  const baseScoreA = baseVariantA
+    ? baseVariantA.criteria.overallDesignScore
+    : sortedVariants[sortedVariants.length - 1]?.criteria.overallDesignScore || 0;
+
+  const handleSaveVariantAsEdition = async (variant: VariantEvaluationResult) => {
+    setSavingAsEdition(true);
+    setSavedNotice(null);
+    try {
+      await saveEditionPreset({
+        name: `Édition issue de ${variant.variantLabel}`,
+        version: '2.1.0',
+        description: `Enregistrée depuis la campagne « ${selectedCampaign.config.name} » (Note Globale : ${variant.criteria.overallDesignScore.toFixed(1)}/100).`,
+        switches: {
+          ruleNoTargetH1: variant.params.ruleNoTargetH1,
+          ruleParryMode: variant.params.ruleParryMode,
+          rulePreventiveDestruction: variant.params.rulePreventiveDestruction,
+          ruleBulldozerTargeting: variant.params.ruleBulldozerTargeting,
+          ruleScrapyardExit: variant.params.ruleScrapyardExit,
+          ruleInitialSetup: variant.params.ruleInitialSetup,
+        },
+        defaultParams: variant.params,
+      });
+      if (onEditionSaved) await onEditionSaved();
+      setSavedNotice(`Variante « ${variant.variantLabel} » enregistrée dans le Conservatoire (Niveau 1).`);
+    } finally {
+      setSavingAsEdition(false);
+    }
+  };
 
   return (
-    <div className="space-y-8">
-      {/* Barre de Sélection et Supervision de la Campagne Active */}
-      <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <span>
-                {selectedCampaign.config.type === 'EVALUATION_SWEEP'
-                  ? 'Campagne Multi-Variantes & 4 Critères'
-                  : 'Stress-Test & Vérification Formelle (VM Oracle)'}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums">
-                Seed de base : {selectedCampaign.config.baseSeed}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums">
-                Statut : {selectedCampaign.status}
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <label htmlFor="campaign-select" className="sr-only">
-                Choisir une campagne
-              </label>
-              <select
-                id="campaign-select"
-                value={selectedCampaign.id}
-                onChange={(e) => {
-                  setSelectedVariantIdx(0);
-                  setSelectedTableIdx(0);
-                  onSelectCampaign(e.target.value);
-                }}
-                className="text-base font-semibold bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-600"
-              >
-                {campaigns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.config.name} ({c.progress.completedGames.toLocaleString('fr-FR')} parties — {c.status})
-                  </option>
-                ))}
-              </select>
-            </div>
+    <div className="space-y-6">
+      {/* Sélecteur de Campagne & Barre de Progression / Export */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Campagne active :
+            </label>
+            <select
+              value={selectedCampaign.id}
+              onChange={(e) => {
+                onSelectCampaign(e.target.value);
+                setSelectedVariantId(null);
+              }}
+              className="px-3 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md"
+            >
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.config.name} ({c.status} · {c.progress.completedGames} parties)
+                </option>
+              ))}
+            </select>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
             {selectedCampaign.status === 'RUNNING' && (
               <button
                 onClick={() => onControlCampaign(selectedCampaign.id, 'pause')}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-md hover:bg-amber-100 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1 px-3 py-1.5 font-medium bg-amber-100 text-amber-800 rounded-md"
               >
                 <Pause className="w-3.5 h-3.5" />
-                Mettre en pause
+                Pause
               </button>
             )}
             {selectedCampaign.status === 'PAUSED' && (
               <button
                 onClick={() => onControlCampaign(selectedCampaign.id, 'resume')}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-emerald-800 dark:text-emerald-200 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 rounded-md hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1 px-3 py-1.5 font-medium bg-emerald-100 text-emerald-800 rounded-md"
               >
                 <Play className="w-3.5 h-3.5" />
                 Reprendre
@@ -170,799 +160,632 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               selectedCampaign.status === 'PAUSED') && (
               <button
                 onClick={() => onControlCampaign(selectedCampaign.id, 'stop')}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1 px-3 py-1.5 font-medium bg-red-100 text-red-800 rounded-md"
               >
                 <Square className="w-3.5 h-3.5" />
-                Arrêter et consolider
+                Arrêter
               </button>
             )}
 
             <a
               href={getMarkdownExportUrl(selectedCampaign.id)}
               download
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-md transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-md transition-colors"
             >
-              <FileText className="w-3.5 h-3.5" />
-              Rapport IA (.md)
+              <Download className="w-3.5 h-3.5" />
+              Rapport Markdown IA (.md)
             </a>
             <a
               href={getJsonExportUrl(selectedCampaign.id)}
               download
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded-md transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-md transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
-              Export JSON
+              JSON Complet
             </a>
-            {campaigns.length > 1 && (
-              <button
-                onClick={() => onDeleteCampaign(selectedCampaign.id)}
-                title="Supprimer cette campagne"
-                className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-transparent hover:border-red-200 rounded-md transition-colors whitespace-nowrap shrink-0"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Supprimer
-              </button>
-            )}
+            <button
+              onClick={() => onDeleteCampaign(selectedCampaign.id)}
+              className="p-1.5 text-slate-400 hover:text-red-600"
+              title="Supprimer cette campagne"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
-        {/* Barre de progression et télémétrie d'exécution */}
-        <div className="pt-4 space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
+        {/* Barre de progression temps réel */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400 font-mono tabular-nums">
             <span>{selectedCampaign.progress.currentPhaseLabel}</span>
-            <div className="flex items-center gap-3 font-mono tabular-nums">
-              <span>
-                {selectedCampaign.progress.completedGames.toLocaleString('fr-FR')} /{' '}
-                {selectedCampaign.progress.totalTargetGames.toLocaleString('fr-FR')} parties ({pct.toFixed(1)}%)
-              </span>
-              <span aria-hidden="true">·</span>
-              <span>
-                {selectedCampaign.progress.gamesPerSecond.toFixed(0)} parties/s
-              </span>
-              <span aria-hidden="true">·</span>
-              <span>{selectedCampaign.progress.elapsedSeconds.toFixed(1)}s</span>
-            </div>
+            <span>
+              {selectedCampaign.progress.completedGames.toLocaleString('fr-FR')} /{' '}
+              {selectedCampaign.progress.totalTargetGames.toLocaleString('fr-FR')} parties ·{' '}
+              {selectedCampaign.progress.gamesPerSecond.toFixed(1)} parties/s ·{' '}
+              {selectedCampaign.progress.elapsedSeconds.toFixed(1)}s
+            </span>
           </div>
-          <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
+          <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
             <div
-              className="h-full bg-emerald-600 transition-all duration-200"
-              style={{ width: `${pct}%` }}
+              className="h-full bg-emerald-600 transition-all duration-300"
+              style={{
+                width: `${Math.min(
+                  100,
+                  (selectedCampaign.progress.completedGames /
+                    Math.max(1, selectedCampaign.progress.totalTargetGames)) *
+                    100
+                )}%`,
+              }}
             />
           </div>
         </div>
-      </section>
 
-      {/* Si c'est une campagne Stress-Test uniquement sans variantes d'évaluation, proposer un raccourci */}
-      {selectedCampaign.config.type === 'ORACLE_STRESS_TEST' &&
-        variants.length === 0 && (
-          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                Campagne de Stress-Test & Vérification Formelle sélectionnée
-              </h2>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                Consultez l’onglet Stress-Test VM Oracle pour inspecter les invariants (I1–I4) et les occurrences des cas limites (H1–H7).
-              </p>
-            </div>
-            <button
-              onClick={() => onNavigateTab('stress')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-md transition-colors whitespace-nowrap shrink-0"
-            >
-              Ouvrir la console Stress-Test
-              <ArrowUpRight className="w-4 h-4" />
-            </button>
-          </section>
+        {savedNotice && (
+          <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded text-xs text-emerald-800 dark:text-emerald-200">
+            {savedNotice}
+          </div>
         )}
+      </div>
 
-      {/* Comparateur de toutes les Variantes de la Campagne */}
-      {variants.length > 0 && (
-        <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                01. Comparaison Multi-Variantes & Synthèse des 4 Critères
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Cliquez sur une ligne de variante pour inspecter ses distributions par configuration de table et l’équilibre de {dict['board.villain.eye']}.
-              </p>
-            </div>
-            <button
-              onClick={() => onNavigateTab('builder')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0"
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              Tester d'autres variantes
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                  <th className="py-2.5 pr-4 font-medium">Variante testée</th>
-                  <th className="py-2.5 px-3 font-medium text-right">Note Globale</th>
-                  <th className="py-2.5 px-3 font-medium text-right">1. Simplicité & Ergo</th>
-                  <th className="py-2.5 px-3 font-medium text-right">2. Intérêt Stratégique</th>
-                  <th className="py-2.5 px-3 font-medium text-right">3. Tension & Choix</th>
-                  <th className="py-2.5 px-3 font-medium text-right">4. Collaboration</th>
-                  <th className="py-2.5 px-3 font-medium text-right">Survie (Coop N2)</th>
-                  <th className="py-2.5 pl-3 font-medium text-right">Écart Stratège - Égoïste</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
-                {variants.map((v, idx) => {
-                  const isSelected = idx === safeVarIdx;
-                  const coopSummary =
-                    v.tableSummaries.find((t) =>
-                      t.botProfiles.includes('COOPERATIVE')
-                    ) || v.tableSummaries[0];
-                  return (
-                    <tr
-                      key={v.variantId}
-                      onClick={() => {
-                        setSelectedVariantIdx(idx);
-                        setSelectedTableIdx(0);
-                      }}
-                      className={`cursor-pointer transition-colors ${
-                        isSelected
-                          ? 'bg-emerald-50/70 dark:bg-emerald-950/30 text-slate-900 dark:text-slate-100 font-medium'
-                          : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      <td className="py-2.5 pr-4 font-sans">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-slate-900 dark:text-slate-100">
-                            {v.variantLabel}
-                          </span>
-                          {isSelected && (
-                            <span className="text-[11px] text-emerald-700 dark:text-emerald-400">
-                              [Active]
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-semibold text-slate-900 dark:text-slate-100">
-                        {v.criteria.overallDesignScore}/100
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        {v.criteria.simplicityErgonomics.score}/100
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        {v.criteria.strategicInterest.score}/100
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        {v.criteria.tensionToughChoices.score}/100
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        {v.criteria.collaborationInterest.score}/100
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        {coopSummary
-                          ? `${(coopSummary.meanNormalizedScore * 100).toFixed(1)}%`
-                          : '—'}
-                      </td>
-                      <td className="py-2.5 pl-3 text-right text-emerald-700 dark:text-emerald-400">
-                        +{(v.criteria.strategicInterest.skillGapStrategistVsSelfish * 100).toFixed(1)}%
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {/* Évaluation Détaillée des 4 Critères pour la Variante Active */}
+      {/* Si la campagne contient des variantes (Evaluation Sweep ou AB Ablation) */}
       {activeVariant && (
-        <section className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2">
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              02. Évaluation Analytique des 4 Critères — {activeVariant.variantLabel}
-            </h2>
-            <div className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-              Note globale de conception :{' '}
-              <strong className="text-slate-900 dark:text-slate-100">
-                {activeVariant.criteria.overallDesignScore}/100
-              </strong>
+        <>
+          {/* Table Comparative des Variantes / Ablation Croisée (Paired Seeds) */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Classement Comparatif & Matrice d’Ablation sur Graines Appariées ({variants.length} variante(s))
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Cliquez sur une ligne pour inspecter ses 5 Critères Principaux (/100), ses 4 Axes Diagnostiques Complémentaires et ses capteurs H1–H7b.
+                </p>
+              </div>
+              <button
+                onClick={() => handleSaveVariantAsEdition(activeVariant)}
+                disabled={savingAsEdition}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded hover:bg-emerald-100"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                Enregistrer la variante sélectionnée comme Édition
+              </button>
+            </div>
+
+            <div className="overflow-x-auto max-h-96">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 text-slate-500 font-semibold border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="py-2.5 px-3">Variante / Cocktail</th>
+                    <th className="py-2.5 px-2 text-right">Modifs /V1</th>
+                    <th className="py-2.5 px-2 text-right">Note /100</th>
+                    <th className="py-2.5 px-2 text-right">Δ vs Base</th>
+                    <th className="py-2.5 px-2 text-right">1. Sobriété</th>
+                    <th className="py-2.5 px-2 text-right">2. Stratégie</th>
+                    <th className="py-2.5 px-2 text-right">3. Tension</th>
+                    <th className="py-2.5 px-2 text-right">4. Collab.</th>
+                    <th className="py-2.5 px-2 text-right">5. Vitalité</th>
+                    <th className="py-2.5 px-2 text-right">Durée (A)</th>
+                    <th className="py-2.5 px-3 text-right">ΔGobelet (D)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
+                  {sortedVariants.map((v) => {
+                    const isSelected = v.variantId === activeVariant.variantId;
+                    const deltaBase = v.criteria.overallDesignScore - baseScoreA;
+                    return (
+                      <tr
+                        key={v.variantId}
+                        onClick={() => setSelectedVariantId(v.variantId)}
+                        className={`cursor-pointer transition-colors ${
+                          isSelected
+                            ? 'bg-emerald-50/70 dark:bg-emerald-950/40 font-semibold'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                        }`}
+                      >
+                        <td className="py-2.5 px-3 font-sans">
+                          <div className="text-slate-900 dark:text-slate-100 font-medium">
+                            {v.variantLabel}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            n={v.params.n}, q={v.params.q}, a={v.params.a}, x={v.params.x} · {v.params.modeTirageDes}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2 text-right">
+                          {v.switchesChangedCountFromV1}/6
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-bold text-emerald-700 dark:text-emerald-400">
+                          {v.criteria.overallDesignScore.toFixed(1)}
+                        </td>
+                        <td
+                          className={`py-2.5 px-2 text-right ${
+                            deltaBase > 0
+                              ? 'text-emerald-600'
+                              : deltaBase < 0
+                              ? 'text-red-600'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {deltaBase >= 0 ? `+${deltaBase.toFixed(1)}` : deltaBase.toFixed(1)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right">
+                          {v.criteria.simplicitySobriety.score.toFixed(0)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right">
+                          {v.criteria.strategicDepth.score.toFixed(0)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right">
+                          {v.criteria.tensionDrama.score.toFixed(0)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right">
+                          {v.criteria.collaborationNecessity.score.toFixed(0)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right">
+                          {v.criteria.foremanVitalityFairness.score.toFixed(0)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right">
+                          {v.diagnosticAxes.axisA_PhysicalDuration.totalEstimatedMinutes.toFixed(0)} min
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
+                          {(v.diagnosticAxes.axisD_PrivateCupUtility.survivalGainFromSecret * 100).toFixed(1)}%
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Critère 1 : Simplicité et Ergonomie */}
-            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-              <div className="flex items-start justify-between gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Critère 1 · Fluidité & Charge Cognitive
-                  </div>
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    Simplicité et Ergonomie
-                  </h3>
-                </div>
-                <div className="text-right font-mono tabular-nums">
-                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {activeVariant.criteria.simplicityErgonomics.score}
-                    <span className="text-xs font-normal text-slate-400">/100</span>
-                  </div>
-                  <div
-                    className={`text-xs font-sans ${
-                      formatCriterionStatus(
-                        activeVariant.criteria.simplicityErgonomics.score
-                      ).colorClass
-                    }`}
-                  >
-                    {
-                      formatCriterionStatus(
-                        activeVariant.criteria.simplicityErgonomics.score
-                      ).label
-                    }
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                {activeVariant.criteria.simplicityErgonomics.interpretation}
-              </p>
-
-              <dl className="grid grid-cols-2 gap-3 pt-2 text-xs">
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Cartes à effet direct
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.simplicityErgonomics
-                        .directResolutionRate * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Manipulations / tour
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {activeVariant.criteria.simplicityErgonomics.meanManipulationsPerTurn.toFixed(
-                      2
-                    )}{' '}
-                    mvts
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Verrouillage Étape 2
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {activeVariant.criteria.simplicityErgonomics.meanNegotiationCycles.toFixed(
-                      2
-                    )}{' '}
-                    cycles
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Cas limites H1–H6 / partie
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {activeVariant.criteria.simplicityErgonomics.edgeCaseFrequencyPerGame.toFixed(
-                      2
-                    )}
-                  </dd>
-                </div>
-              </dl>
-            </div>
-
-            {/* Critère 2 : Intérêt Stratégique */}
-            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-              <div className="flex items-start justify-between gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Critère 2 · Impact de la Compétence & Équité
-                  </div>
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    Intérêt Stratégique
-                  </h3>
-                </div>
-                <div className="text-right font-mono tabular-nums">
-                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {activeVariant.criteria.strategicInterest.score}
-                    <span className="text-xs font-normal text-slate-400">/100</span>
-                  </div>
-                  <div
-                    className={`text-xs font-sans ${
-                      formatCriterionStatus(
-                        activeVariant.criteria.strategicInterest.score
-                      ).colorClass
-                    }`}
-                  >
-                    {
-                      formatCriterionStatus(
-                        activeVariant.criteria.strategicInterest.score
-                      ).label
-                    }
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                {activeVariant.criteria.strategicInterest.interpretation}
-              </p>
-
-              <dl className="grid grid-cols-2 gap-3 pt-2 text-xs">
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Gain Stratège (N3) vs Égoïste (N1)
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
-                    +
-                    {(
-                      activeVariant.criteria.strategicInterest
-                        .skillGapStrategistVsSelfish * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Gain Égoïste (N1) vs Aléatoire
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    +
-                    {(
-                      activeVariant.criteria.strategicInterest
-                        .skillGapSelfishVsRandom * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Entropie Tactiques (Case 1)
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.strategicInterest
-                        .tacticSlot1Entropy * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Indice d’équité des Rangs Œil
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.strategicInterest
-                        .initialRankFairnessIndex * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-              </dl>
-            </div>
-
-            {/* Critère 3 : Tension et Choix difficiles */}
-            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-              <div className="flex items-start justify-between gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Critère 3 · Dilemmes & Courbe Dramatique
-                  </div>
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    Tension (Choix Difficiles)
-                  </h3>
-                </div>
-                <div className="text-right font-mono tabular-nums">
-                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {activeVariant.criteria.tensionToughChoices.score}
-                    <span className="text-xs font-normal text-slate-400">/100</span>
-                  </div>
-                  <div
-                    className={`text-xs font-sans ${
-                      formatCriterionStatus(
-                        activeVariant.criteria.tensionToughChoices.score
-                      ).colorClass
-                    }`}
-                  >
-                    {
-                      formatCriterionStatus(
-                        activeVariant.criteria.tensionToughChoices.score
-                      ).label
-                    }
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                {activeVariant.criteria.tensionToughChoices.interpretation}
-              </p>
-
-              <dl className="grid grid-cols-2 gap-3 pt-2 text-xs">
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Fréquence de dilemmes (&lt;15% écart)
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.tensionToughChoices
-                        .dilemmaFrequency * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Ratio Menaces / Défenseurs
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {activeVariant.criteria.tensionToughChoices.pressureToDefenseRatio.toFixed(
-                      2
-                    )}{' '}
-                    cibles/jeton
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Parties serrées (45%–82%)
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.tensionToughChoices.closeGameRate *
-                      100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Proximité zone idéale (68%)
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.tensionToughChoices
-                        .survivalSweetSpotProximity * 100
-                    ).toFixed(0)}
-                    %
-                  </dd>
-                </div>
-              </dl>
-            </div>
-
-            {/* Critère 4 : Intérêt à Collaborer Efficacement */}
-            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-              <div className="flex items-start justify-between gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Critère 4 · Signalisation Muette & Seuils D=2 / D=3
-                  </div>
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    Intérêt à Collaborer Efficacement
-                  </h3>
-                </div>
-                <div className="text-right font-mono tabular-nums">
-                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {activeVariant.criteria.collaborationInterest.score}
-                    <span className="text-xs font-normal text-slate-400">/100</span>
-                  </div>
-                  <div
-                    className={`text-xs font-sans ${
-                      formatCriterionStatus(
-                        activeVariant.criteria.collaborationInterest.score
-                      ).colorClass
-                    }`}
-                  >
-                    {
-                      formatCriterionStatus(
-                        activeVariant.criteria.collaborationInterest.score
-                      ).label
-                    }
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                {activeVariant.criteria.collaborationInterest.interpretation}
-              </p>
-
-              <dl className="grid grid-cols-2 gap-3 pt-2 text-xs">
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Gain Communication (N2 vs N1)
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
-                    +
-                    {(
-                      activeVariant.criteria.collaborationInterest
-                        .communicationGainCoopVsSelfish * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Destructions coordonnées / tour
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {activeVariant.criteria.collaborationInterest.coordinatedDestructionRate.toFixed(
-                      2
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Évitement d’overkill (Étape 2)
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.collaborationInterest
-                        .overkillReductionEfficiency * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-slate-500 dark:text-slate-400">
-                    Efficacité vs Borne Omnisciente
-                  </dt>
-                  <dd className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                    {(
-                      activeVariant.criteria.collaborationInterest
-                        .informationEfficiencyVsOmniscient * 100
-                    ).toFixed(1)}
-                    %
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Résultats par Configuration de Table sur la Variante Active */}
-      {activeVariant && tables.length > 0 && (
-        <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                03. Résultats par Configuration de Table — {activeVariant.variantLabel}
+          {/* =============================================================== */}
+          {/* SECTION 5 : LES 5 CRITÈRES PRINCIPAUX D'ÉVALUATION (/100)       */}
+          {/* =============================================================== */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                Les 5 Critères Principaux d’Évaluation (/100) — {activeVariant.variantLabel}
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Comparaison des compositions d'équipes de bots sur les mêmes graines aléatoires (capacité totale :{' '}
-                {activeVariant.params.n * activeVariant.params.q * activeVariant.params.a} arbres, soit{' '}
-                {activeVariant.params.q * activeVariant.params.a} arbres par {dict['board.player.sector']}).
-              </p>
+              <span className="text-sm font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                Note Globale Pondérée : {activeVariant.criteria.overallDesignScore.toFixed(1)} / 100
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              {/* Critère 1 : Simplicité, Fluidité & Sobriété */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">
+                    1. Simplicité & Sobriété
+                  </div>
+                  <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1">
+                    {activeVariant.criteria.simplicitySobriety.score.toFixed(1)}
+                    <span className="text-xs font-normal text-slate-400"> /100</span>
+                  </div>
+                  <div className="mt-3 space-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    <div>
+                      Actions utiles :{' '}
+                      {activeVariant.criteria.simplicitySobriety.effectiveActionRateScore.toFixed(1)}/40 ({(activeVariant.criteria.simplicitySobriety.effectiveActionRate * 100).toFixed(0)}%)
+                    </div>
+                    <div>
+                      Manip./tour actif :{' '}
+                      {activeVariant.criteria.simplicitySobriety.activeTurnManipulationScore.toFixed(1)}/30 ({activeVariant.criteria.simplicitySobriety.manipulationsPerActiveTurn.toFixed(1)})
+                    </div>
+                    <div>
+                      Sobriété livret :{' '}
+                      {activeVariant.criteria.simplicitySobriety.rulebookConceptualSobrietyScore.toFixed(1)}/30
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
+                  {activeVariant.criteria.simplicitySobriety.interpretation}
+                </p>
+              </div>
+
+              {/* Critère 2 : Profondeur Stratégique */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">
+                    2. Profondeur Stratégique
+                  </div>
+                  <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1">
+                    {activeVariant.criteria.strategicDepth.score.toFixed(1)}
+                    <span className="text-xs font-normal text-slate-400"> /100</span>
+                  </div>
+                  <div className="mt-3 space-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    <div>
+                      N1 vs N0 (Plancher) :{' '}
+                      {activeVariant.criteria.strategicDepth.coherenceN1VsRandomScore.toFixed(1)}/15 (+{(activeVariant.criteria.strategicDepth.deltaN1VsRandom * 100).toFixed(1)}%)
+                    </div>
+                    <div>
+                      N2 vs N1 (Tactique) :{' '}
+                      {activeVariant.criteria.strategicDepth.tacticalMasteryN2VsN1Score.toFixed(1)}/40 (+{(activeVariant.criteria.strategicDepth.deltaN2VsN1 * 100).toFixed(1)}%)
+                    </div>
+                    <div>
+                      N3 vs N2 (Méta) :{' '}
+                      {activeVariant.criteria.strategicDepth.metaMasteryN3VsN2Score.toFixed(1)}/45 (+{(activeVariant.criteria.strategicDepth.deltaN3VsN2 * 100).toFixed(1)}%)
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
+                  {activeVariant.criteria.strategicDepth.interpretation}
+                </p>
+              </div>
+
+              {/* Critère 3 : Tension & Courbe Dramatique */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">
+                    3. Tension & Dramaturgie
+                  </div>
+                  <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1">
+                    {activeVariant.criteria.tensionDrama.score.toFixed(1)}
+                    <span className="text-xs font-normal text-slate-400"> /100</span>
+                  </div>
+                  <div className="mt-3 space-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    <div>
+                      Proximité cible :{' '}
+                      {activeVariant.criteria.tensionDrama.bracketDistributionProximityScore.toFixed(1)}/50
+                    </div>
+                    <div>
+                      Attrition av. régén. :{' '}
+                      {activeVariant.criteria.tensionDrama.activeAttritionScore.toFixed(1)}/30 ({(activeVariant.criteria.tensionDrama.meanAttritionBeforeRegen * 100).toFixed(0)}%)
+                    </div>
+                    <div>
+                      Dilemmes :{' '}
+                      {activeVariant.criteria.tensionDrama.dilemmaFrequencyScore.toFixed(1)}/20 ({(activeVariant.criteria.tensionDrama.dilemmaFrequency * 100).toFixed(0)}%)
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
+                  {activeVariant.criteria.tensionDrama.interpretation}
+                </p>
+              </div>
+
+              {/* Critère 4 : Nécessité de Collaborer */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">
+                    4. Nécessité de Collaborer
+                  </div>
+                  <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1">
+                    {activeVariant.criteria.collaborationNecessity.score.toFixed(1)}
+                    <span className="text-xs font-normal text-slate-400"> /100</span>
+                  </div>
+                  <div className="mt-3 space-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    <div>
+                      Gain N2 vs N1 :{' '}
+                      {activeVariant.criteria.collaborationNecessity.netCommunicationGainScore.toFixed(1)}/50 (+{(activeVariant.criteria.collaborationNecessity.deltaCoopVsSelfish * 100).toFixed(1)}%)
+                    </div>
+                    <div>
+                      Sauvetages Étape 2 :{' '}
+                      {activeVariant.criteria.collaborationNecessity.microCycleRescueImpactScore.toFixed(1)}/30 ({activeVariant.criteria.collaborationNecessity.step2RescueRatePerTurn.toFixed(2)}/t)
+                    </div>
+                    <div>
+                      Conv. Omniscient :{' '}
+                      {activeVariant.criteria.collaborationNecessity.omniscientConvergenceScore.toFixed(1)}/20
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
+                  {activeVariant.criteria.collaborationNecessity.interpretation}
+                </p>
+              </div>
+
+              {/* Critère 5 : Vitalité du Contremaître & Équité des Rangs */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">
+                    5. Vitalité & Équité Rangs
+                  </div>
+                  <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1">
+                    {activeVariant.criteria.foremanVitalityFairness.score.toFixed(1)}
+                    <span className="text-xs font-normal text-slate-400"> /100</span>
+                  </div>
+                  <div className="mt-3 space-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    <div>
+                      Activité continue :{' '}
+                      {activeVariant.criteria.foremanVitalityFairness.continuousActivityScore.toFixed(1)}/35 ({(activeVariant.criteria.foremanVitalityFairness.nonStagnantTurnRate * 100).toFixed(0)}%)
+                    </div>
+                    <div>
+                      Renouv. Case 1 :{' '}
+                      {activeVariant.criteria.foremanVitalityFairness.tacticsRenewalScore.toFixed(1)}/35 (H={activeVariant.criteria.foremanVitalityFairness.tacticSlot1Entropy.toFixed(2)})
+                    </div>
+                    <div>
+                      Équité Rang 1 :{' '}
+                      {activeVariant.criteria.foremanVitalityFairness.initialEyeFairnessScore.toFixed(1)}/30 (Écart {(activeVariant.criteria.foremanVitalityFairness.rank1VsOthersGap * 100).toFixed(1)}%)
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
+                  {activeVariant.criteria.foremanVitalityFairness.interpretation}
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                  <th className="py-2.5 pr-4 font-medium">Configuration de Table</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Score Brut</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Arbres / J</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Préservation</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Écart-Type</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Miracle (100%)</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Majeure (≥75%)</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Coûteuse (≥50%)</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Défaite (&lt;50%)</th>
-                  <th className="py-2.5 px-2.5 font-medium text-right">Parades %</th>
-                  <th className="py-2.5 pl-2.5 font-medium text-right">Gaspillage Déf.</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
-                {tables.map((t, idx) => {
-                  const isSel = idx === safeTableIdx;
-                  return (
-                    <tr
-                      key={t.tableConfigId}
-                      onClick={() => setSelectedTableIdx(idx)}
-                      className={`cursor-pointer transition-colors ${
-                        isSel
-                          ? 'bg-emerald-50/70 dark:bg-emerald-950/30 text-slate-900 dark:text-slate-100 font-medium'
-                          : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      <td className="py-2.5 pr-4 font-sans">
-                        <span className="font-semibold text-slate-900 dark:text-slate-100">
-                          {t.tableConfigName}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right">{t.meanRawScore.toFixed(2)}</td>
-                      <td className="py-2.5 px-2.5 text-right">{t.meanScorePerPlayer.toFixed(2)}</td>
-                      <td className="py-2.5 px-2.5 text-right font-semibold text-emerald-700 dark:text-emerald-400">
-                        {(t.meanNormalizedScore * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right">
-                        ±{(t.stdDevNormalizedScore * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right">
-                        {(t.victoryBracketsRate.MIRACLE * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right">
-                        {(t.victoryBracketsRate.MAJOR_VICTORY * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right">
-                        {(t.victoryBracketsRate.COSTLY_VICTORY * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right text-red-700 dark:text-red-400">
-                        {(t.victoryBracketsRate.DEFEAT * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right">
-                        {(t.cardParriedRate * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2.5 pl-2.5 text-right">
-                        {(t.wastedDefenderRate * 100).toFixed(1)}%
-                      </td>
+          {/* =============================================================== */}
+          {/* SECTION 6 : LES 4 AXES DIAGNOSTIQUES COMPLÉMENTAIRES            */}
+          {/* =============================================================== */}
+          <div className="space-y-4">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+              Les 4 Axes Diagnostiques Complémentaires (Hors Note Globale)
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Axe A : Durée de Jeu Physique & Ratio Réflexion/Manipulation */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                    Axe A — Durée de Jeu Physique Estimée
+                  </span>
+                  <Clock className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100">
+                  {activeVariant.diagnosticAxes.axisA_PhysicalDuration.totalEstimatedMinutes.toFixed(1)} min{' '}
+                  <span className="text-xs font-normal text-slate-500">
+                    ({activeVariant.diagnosticAxes.axisA_PhysicalDuration.minutesPerPlayer.toFixed(1)} min/joueur)
+                  </span>
+                </div>
+                <div className="text-xs font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                  <div>
+                    Temps cognitif (Phase 2) :{' '}
+                    {(activeVariant.diagnosticAxes.axisA_PhysicalDuration.cognitiveShareRate * 100).toFixed(0)}% ({(activeVariant.diagnosticAxes.axisA_PhysicalDuration.phase2CognitiveSecondsTotal / 60).toFixed(1)} min)
+                  </div>
+                  <div>
+                    Manipulation (Phase 3) :{' '}
+                    {(activeVariant.diagnosticAxes.axisA_PhysicalDuration.manipulationShareRate * 100).toFixed(0)}% ({(activeVariant.diagnosticAxes.axisA_PhysicalDuration.phase3ManipulationSecondsTotal / 60).toFixed(1)} min)
+                  </div>
+                  <div>
+                    Rythme : Tour 1 ≈ {activeVariant.diagnosticAxes.axisA_PhysicalDuration.turn1EstimatedSeconds.toFixed(0)}s → Tour {activeVariant.params.x} ≈ {activeVariant.diagnosticAxes.axisA_PhysicalDuration.turnXEstimatedSeconds.toFixed(0)}s
+                  </div>
+                </div>
+                {activeVariant.diagnosticAxes.axisA_PhysicalDuration.manipulationWarningAlert && (
+                  <div className="p-2 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 text-[11px] flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    Alerte : le temps de manipulation dépasse 45% du temps total.
+                  </div>
+                )}
+                <p className="text-[11px] text-slate-500 pt-1">
+                  {activeVariant.diagnosticAxes.axisA_PhysicalDuration.diagnosticSummary}
+                </p>
+              </div>
+
+              {/* Axe B : Intérêt de l'Apprentissage du Contremaître */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-2">
+                <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  Axe B — Intérêt de l’Apprentissage du Contremaître
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums text-slate-900 dark:text-slate-100">
+                  {(activeVariant.diagnosticAxes.axisB_ForemanLearning.snowballRate * 100).toFixed(1)}%{' '}
+                  <span className="text-xs font-normal text-slate-500">
+                    Effet Boule de Neige P(t+1|t)
+                  </span>
+                </div>
+                <div className="text-xs font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                  <div>
+                    Mouvements Piste/tour : +{activeVariant.diagnosticAxes.axisB_ForemanLearning.meanAdvancesPerTurn.toFixed(2)} av. / -{activeVariant.diagnosticAxes.axisB_ForemanLearning.meanRetreatsPerTurn.toFixed(2)} reculs
+                  </div>
+                  <div>
+                    Contrôle Case 1 (N3 vs N2) : {(activeVariant.diagnosticAxes.axisB_ForemanLearning.n3VsN2Slot1ControlDelta * 100).toFixed(1)}%
+                  </div>
+                  <div>
+                    Diversité Top 2 (Cases 1–2) : {activeVariant.diagnosticAxes.axisB_ForemanLearning.meanDistinctTacticsInTop2.toFixed(2)} / 6 tuiles
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500 pt-1">
+                  {activeVariant.diagnosticAxes.axisB_ForemanLearning.diagnosticSummary}
+                </p>
+              </div>
+
+              {/* Axe D : Utilité de la Connaissance Privée sous le Gobelet */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-2">
+                <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  Axe D — Utilité du Secret sous le Gobelet (N2 vs Aveugle)
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                  +{(activeVariant.diagnosticAxes.axisD_PrivateCupUtility.survivalGainFromSecret * 100).toFixed(1)}%{' '}
+                  <span className="text-xs font-normal text-slate-500">
+                    Gain de survie lié au Gobelet (ΔSecret)
+                  </span>
+                </div>
+                <div className="text-xs font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                  <div>
+                    Inflexion locale (jetons redirigés) : {(activeVariant.diagnosticAxes.axisD_PrivateCupUtility.cupRedirectionRate * 100).toFixed(1)}%
+                  </div>
+                  <div>
+                    Parade surprises (Cases 3–6) : N2 {(activeVariant.diagnosticAxes.axisD_PrivateCupUtility.surpriseAttackParryRateN2 * 100).toFixed(0)}% vs Aveugle {(activeVariant.diagnosticAxes.axisD_PrivateCupUtility.surpriseAttackParryRateBlind * 100).toFixed(0)}%
+                  </div>
+                  <div>
+                    Transmission fidèle du secret (Étape 2) : {(activeVariant.diagnosticAxes.axisD_PrivateCupUtility.secretTransmissionFidelityRate * 100).toFixed(0)}%
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500 pt-1">
+                  {activeVariant.diagnosticAxes.axisD_PrivateCupUtility.diagnosticSummary}
+                </p>
+              </div>
+            </div>
+
+            {/* Axe C : Tableau Analytique Individuel des 6 Tactiques (A1..B3) */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+              <div className="p-4 border-b border-slate-200 dark:border-slate-800">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">
+                  Axe C — Bilan Analytique Individuel des 6 Tactiques (A1, A2, A3, B1, B2, B3)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {activeVariant.diagnosticAxes.axisC_TacticsIndividualBalance.diagnosticSummary}
+                </p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-500 font-semibold">
+                      <th className="py-2 px-3">Tactique</th>
+                      <th className="py-2 px-2 text-right">Fréq. Tirage</th>
+                      <th className="py-2 px-2 text-right">Rang Moyen</th>
+                      <th className="py-2 px-2 text-right">% Case 1</th>
+                      <th className="py-2 px-2 text-right">% Réussite</th>
+                      <th className="py-2 px-2 text-right">% Parée</th>
+                      <th className="py-2 px-2 text-right">% Sans Cible (H1)</th>
+                      <th className="py-2 px-2 text-right">Impact / Tirage</th>
+                      <th className="py-2 px-2 text-right">Déf. Attirés</th>
+                      <th className="py-2 px-3">Diagnostic Automatique</th>
                     </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
+                    {activeVariant.diagnosticAxes.axisC_TacticsIndividualBalance.rows.map(
+                      (row) => (
+                        <tr key={row.tactic}>
+                          <td className="py-2.5 px-3 font-sans font-semibold text-slate-900 dark:text-slate-100">
+                            {TACTIC_DESCRIPTIONS[row.tactic].name}
+                          </td>
+                          <td className="py-2.5 px-2 text-right">
+                            {(row.drawFrequencyRate * 100).toFixed(1)}%
+                          </td>
+                          <td className="py-2.5 px-2 text-right">
+                            {row.meanTrackPosition.toFixed(2)}
+                          </td>
+                          <td className="py-2.5 px-2 text-right">
+                            {(row.slot1ResidencyRate * 100).toFixed(1)}%
+                          </td>
+                          <td className="py-2.5 px-2 text-right text-amber-700 dark:text-amber-400">
+                            {(row.successRate * 100).toFixed(1)}%
+                          </td>
+                          <td className="py-2.5 px-2 text-right text-emerald-700 dark:text-emerald-400">
+                            {(row.parriedRate * 100).toFixed(1)}%
+                          </td>
+                          <td className="py-2.5 px-2 text-right">
+                            {(row.noTargetH1Rate * 100).toFixed(1)}%
+                          </td>
+                          <td className="py-2.5 px-2 text-right">
+                            {row.tactic.startsWith('A')
+                              ? `${row.netTreesCutPerDraw.toFixed(2)} T / +${row.netHarvestersDeployedPerDraw.toFixed(2)} Ab.`
+                              : `${row.netStumpsClearedPerDraw.toFixed(2)} S / +${row.netRepairsPerDraw.toFixed(2)} Rép.`}
+                          </td>
+                          <td className="py-2.5 px-2 text-right">
+                            {row.defensiveMobilizationMean.toFixed(2)}
+                          </td>
+                          <td className="py-2.5 px-3 font-sans">
+                            <span
+                              className={`font-semibold ${
+                                row.diagnosticLabel === 'Équilibrée'
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-amber-700 dark:text-amber-400'
+                              }`}
+                            >
+                              {row.diagnosticLabel}
+                            </span>
+                            <div className="text-[11px] text-slate-500">
+                              {row.diagnosticDetail}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Capteurs Stress-Test intégrés (H1 à H7b & Interrupteurs de la variante) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                Configuration des 6 Interrupteurs Mécaniques ({activeVariant.variantLabel})
+              </h3>
+              <div className="space-y-1.5 text-xs">
+                {SWITCH_KEYS.map((key) => {
+                  const meta = SWITCH_META[key];
+                  const val = activeVariant.params[key];
+                  const isV2 = val === meta.v2Value;
+                  return (
+                    <div
+                      key={key}
+                      className="flex items-center justify-between gap-2 py-1 border-b border-slate-100 dark:border-slate-800 last:border-0"
+                    >
+                      <span className="text-slate-600 dark:text-slate-400">
+                        {meta.title}
+                      </span>
+                      <span
+                        className={`font-mono font-semibold ${
+                          isV2
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : 'text-amber-700 dark:text-amber-400'
+                        }`}
+                      >
+                        {isV2 ? meta.v2Label : meta.v1Label}
+                      </span>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                Capteurs de Cas Limites (H1 à H7b) & Santé Règles
+              </h3>
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono tabular-nums">
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H1 (Tactique sans cible) :{' '}
+                  <strong>{activeVariant.edgeCaseTotals.H1_noTargetEligible}</strong>
+                </div>
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H2 (Cartes A empilées/1 arbre) :{' '}
+                  <strong>
+                    {activeVariant.edgeCaseTotals.H2_multipleHarvesterCardsSingleTree}
+                  </strong>
+                </div>
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H3 (Cartes B empilées) :{' '}
+                  <strong>
+                    {activeVariant.edgeCaseTotals.H3_multipleBulldozerCardsSameCell}
+                  </strong>
+                </div>
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H4 (Immunité Bull. réparé) :{' '}
+                  <strong>
+                    {activeVariant.edgeCaseTotals.H4_repairedBulldozerImmunityInCell1}
+                  </strong>
+                </div>
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H5 (Terrassement dégradé) :{' '}
+                  <strong>
+                    {activeVariant.edgeCaseTotals.H5_degradedBulldozerNoGrudge}
+                  </strong>
+                </div>
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H6 (Rancune groupée/case) :{' '}
+                  <strong>
+                    {activeVariant.edgeCaseTotals.H6_multiEventSameCellSingleGrudge}
+                  </strong>
+                </div>
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H7a (Destr. préventive 0 carte) :{' '}
+                  <strong>
+                    {activeVariant.edgeCaseTotals.H7_preventiveDestructionNoCard}
+                  </strong>
+                </div>
+                <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                  H7b (Gaspillage Défenseurs) :{' '}
+                  <strong>
+                    {activeVariant.edgeCaseTotals.H7_emptyCellOverDefense}
+                  </strong>
+                </div>
+              </div>
+              <div className="text-xs font-mono text-slate-600 dark:text-slate-400 pt-1">
+                Tours stagnants : {(activeVariant.stagnantTurnsRate * 100).toFixed(1)}% · Monopole Case 1 (&gt;85%) : {(activeVariant.slot1MonopolyGamesRate * 100).toFixed(1)}% · Violations d’invariants (I1–I4) :{' '}
+                <strong
+                  className={
+                    activeVariant.invariantViolationsCount === 0
+                      ? 'text-emerald-600'
+                      : 'text-red-600'
+                  }
+                >
+                  {activeVariant.invariantViolationsCount}
+                </strong>
+              </div>
+            </div>
           </div>
-        </section>
-      )}
-
-      {/* Détail Approfondi : Asymétrie Rang sur l'Œil & Stabilité de la Piste des Tactiques */}
-      {activeVariant && activeTable && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Asymétrie liée au Rang initial sur l'Œil du Contremaître */}
-          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                04. Asymétrie selon le Rang Initial sur {dict['board.villain.eye']}
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Table sélectionnée : <strong>{activeTable.tableConfigName}</strong> · Vérifie si le {dict['entity.faction.name']} placé au Rang 1 ou Rang 2 lors de la mise en place est pénalisé.
-              </p>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              {activeTable.perInitialRankMeanTrees.map((treesSaved, rIdx) => {
-                const maxSectorTrees =
-                  activeVariant.params.q * activeVariant.params.a;
-                const ratio =
-                  maxSectorTrees > 0 ? (treesSaved / maxSectorTrees) * 100 : 0;
-                const setupDesc =
-                  rIdx === 0
-                    ? 'Départ : 1 Souche + 1 Abatteuse (p=1) + Bulldozer actif (p=1)'
-                    : rIdx === 1
-                    ? 'Départ : 1 Abatteuse avancée (p=2) + Bulldozer en Casse'
-                    : rIdx === 2
-                    ? 'Départ : Aucune Abatteuse + Bulldozer en Casse'
-                    : 'Départ : 1 Abatteuse (p=1) + Bulldozer en Casse';
-
-                return (
-                  <div key={rIdx} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <div>
-                        <span className="font-semibold text-slate-900 dark:text-slate-100">
-                          Rang {rIdx + 1} sur l’Œil
-                        </span>
-                        <span className="text-slate-500 dark:text-slate-400 ml-2">
-                          · {setupDesc}
-                        </span>
-                      </div>
-                      <span className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
-                        {treesSaved.toFixed(2)} / {maxSectorTrees} ({ratio.toFixed(1)}%)
-                      </span>
-                    </div>
-                    <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-600"
-                        style={{ width: `${Math.min(100, ratio)}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div>
-                <div className="text-slate-500 dark:text-slate-400">
-                  {dict['machine.harvester']}s actives/t
-                </div>
-                <div className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                  {activeTable.meanHarvestersActive.toFixed(2)}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 dark:text-slate-400">
-                  Générées (Setup + A3)
-                </div>
-                <div className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                  {activeTable.meanHarvestersSpawned.toFixed(2)}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 dark:text-slate-400">
-                  {dict['machine.harvester']}s détruites
-                </div>
-                <div className="font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
-                  {activeTable.meanHarvestersDestroyed.toFixed(2)}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 dark:text-slate-400">
-                  Envois Casse {dict['machine.bulldozer']}
-                </div>
-                <div className="font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
-                  {activeTable.meanBulldozerTripsToScrap.toFixed(2)}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Stabilité de la Piste des Tactiques & Seuils Défensifs */}
-          <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                05. Stabilité de la {dict['board.villain.tactics']} (Présence en Case 1)
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Fréquence à laquelle chaque tuile Tactique occupe l’emplacement n°1 (probabilité de tirage maximale 11/36 en min(2d6)).
-              </p>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              {ALL_TACTICS.map((tac) => {
-                const freq =
-                  (activeTable.tacticSlot1Distribution[tac] || 0) * 100;
-                return (
-                  <div key={tac} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-medium text-slate-800 dark:text-slate-200">
-                        {TACTIC_DESCRIPTIONS[tac].name}
-                      </span>
-                      <span className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
-                        {freq.toFixed(1)}%
-                      </span>
-                    </div>
-                    <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
-                      <div
-                        className={`h-full ${
-                          freq > 32 ? 'bg-amber-600' : 'bg-slate-600 dark:bg-slate-400'
-                        }`}
-                        style={{ width: `${Math.min(100, freq * 2)}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 grid grid-cols-3 gap-3 text-xs">
-              <div>
-                <div className="text-slate-500 dark:text-slate-400">
-                  Seuil D=1 (Parade simple)
-                </div>
-                <div className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                  {(activeTable.d1Rate * 100).toFixed(1)}%
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 dark:text-slate-400">
-                  Seuil D=2 (Embuscade)
-                </div>
-                <div className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                  {(activeTable.d2Rate * 100).toFixed(1)}%
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 dark:text-slate-400">
-                  Seuil D≥3 (Assaut massif)
-                </div>
-                <div className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                  {(activeTable.d3PlusRate * 100).toFixed(1)}%
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
+        </>
       )}
     </div>
   );

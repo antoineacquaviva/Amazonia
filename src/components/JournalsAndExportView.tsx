@@ -1,147 +1,104 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   BotProfileId,
   CampaignRecord,
+  EditionPreset,
+  SingleGameResult,
   ThemeVocabularyMode,
 } from '../sim/types';
-import { BOT_PROFILE_META, DEFAULT_GAME_PARAMETERS } from '../sim/i18n';
-import { generateCampaignMarkdownReport } from '../sim/evaluator';
+import {
+  BOT_PROFILE_META,
+  DEFAULT_GAME_PARAMETERS,
+  DICTIONARIES,
+  SWITCH_KEYS,
+  SWITCH_META,
+  TACTIC_DESCRIPTIONS,
+} from '../sim/i18n';
 import {
   getJsonExportUrl,
   getMarkdownExportUrl,
   simulateSingleGameTrace,
 } from '../api';
-import { Copy, Check, Download, FileText, Play } from 'lucide-react';
+import { Copy, Download, FileText, Play } from 'lucide-react';
 
 interface JournalsAndExportViewProps {
   campaigns: CampaignRecord[];
+  editions: EditionPreset[];
   selectedCampaign: CampaignRecord | null;
   onSelectCampaign: (id: string) => void;
   vocabulary: ThemeVocabularyMode;
+  onChangeVocabulary: (v: ThemeVocabularyMode) => void;
 }
 
 export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
   campaigns,
+  editions,
   selectedCampaign,
   onSelectCampaign,
   vocabulary,
+  onChangeVocabulary,
 }) => {
-  const [activeSubMode, setActiveSubMode] = useState<'report' | 'traces' | 'single'>('report');
-  const [copiedReport, setCopiedReport] = useState<boolean>(false);
-  const [copiedTrace, setCopiedTrace] = useState<boolean>(false);
+  const [seed, setSeed] = useState<number>(104209);
+  const [selectedEditionId, setSelectedEditionId] = useState<string>(
+    editions[1]?.id || 'ed-v2-refonte'
+  );
+  const [botProfile, setBotProfile] = useState<BotProfileId>('COOPERATIVE');
+  const [singleResult, setSingleResult] = useState<SingleGameResult | null>(
+    null
+  );
+  const [runningSingle, setRunningSingle] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  // Simulation unitaire à la demande
-  const [customSeed, setCustomSeed] = useState<number>(42001);
-  const [customN, setCustomN] = useState<number>(4);
-  const [customQ, setCustomQ] = useState<number>(6);
-  const [customA, setCustomA] = useState<number>(2);
-  const [customX, setCustomX] = useState<number>(8);
-  const [customBot, setCustomBot] = useState<BotProfileId>('COOPERATIVE');
-  const [singleJournal, setSingleJournal] = useState<string>('');
-  const [loadingSingle, setLoadingSingle] = useState<boolean>(false);
-
-  // Collecter toutes les traces disponibles dans la campagne active
-  const availableTraces: Array<{
-    id: string;
-    label: string;
-    seed: number;
-    journal: string;
-  }> = [];
-
-  if (selectedCampaign) {
-    if (selectedCampaign.stressTelemetry) {
-      for (const ext of selectedCampaign.stressTelemetry.capturedExtremeLogs) {
-        availableTraces.push({
-          id: `stress_${ext.seed}_${ext.category}`,
-          label: `[${ext.category}] Seed ${ext.seed} — ${ext.summary}`,
-          seed: ext.seed,
-          journal: ext.textualJournal,
-        });
-      }
-    }
-    for (const v of selectedCampaign.variantResults) {
-      for (const s of v.sampleTraces) {
-        availableTraces.push({
-          id: `${v.variantId}_${s.tableConfigName}_${s.seed}`,
-          label: `[${s.tag}] ${v.variantLabel} · ${s.tableConfigName} (Seed ${s.seed} — Score ${s.rawScore}, ${(s.normalizedScore * 100).toFixed(0)}%)`,
-          seed: s.seed,
-          journal: s.textualJournal,
-        });
-      }
-    }
-  }
-
-  const [selectedTraceIdx, setSelectedTraceIdx] = useState<number>(0);
-  const safeTraceIdx =
-    selectedTraceIdx < availableTraces.length ? selectedTraceIdx : 0;
-  const activeTrace = availableTraces[safeTraceIdx] || null;
-
-  const markdownReport = selectedCampaign
-    ? generateCampaignMarkdownReport(selectedCampaign)
-    : '';
-
-  const handleRunSingle = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setLoadingSingle(true);
+  const handleRunSingle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRunningSingle(true);
     try {
+      const ed =
+        editions.find((x) => x.id === selectedEditionId) || editions[0];
+      const params = {
+        ...DEFAULT_GAME_PARAMETERS,
+        ...(ed?.defaultParams || {}),
+        ...(ed?.switches || {}),
+      };
       const res = await simulateSingleGameTrace({
-        seed: customSeed,
-        params: {
-          ...DEFAULT_GAME_PARAMETERS,
-          n: customN,
-          q: customQ,
-          a: customA,
-          x: customX,
-        },
-        botProfiles: [customBot],
+        seed,
+        params,
+        botProfiles: [botProfile],
         vocabulary,
       });
-      setSingleJournal(res.textualJournal || '');
+      setSingleResult(res);
     } finally {
-      setLoadingSingle(false);
+      setRunningSingle(false);
     }
   };
 
-  useEffect(() => {
-    if (activeSubMode === 'single' && !singleJournal) {
-      handleRunSingle();
-    }
-  }, [activeSubMode, vocabulary]);
-
-  const copyToClipboard = (text: string, isReport: boolean) => {
-    navigator.clipboard.writeText(text);
-    if (isReport) {
-      setCopiedReport(true);
-      setTimeout(() => setCopiedReport(false), 2000);
-    } else {
-      setCopiedTrace(true);
-      setTimeout(() => setCopiedTrace(false), 2000);
-    }
-  };
+  const sampleJournalText =
+    singleResult?.textualJournal ||
+    selectedCampaign?.variantResults?.[0]?.sampleTraces?.[0]?.textualJournal ||
+    selectedCampaign?.stressTelemetry?.capturedExtremeLogs?.[0]
+      ?.textualJournal ||
+    'Lancez une simulation unitaire ci-dessus ou sélectionnez une campagne pour afficher un journal textuel complet.';
 
   return (
     <div className="space-y-6">
-      {/* Barre supérieure de sélection de campagne et d'export direct */}
-      <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-            Journaux Textuels d’Exécution & Bilan Téléchargeable pour IA
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Conçu pour fournir à un grand modèle de langage l’intégralité des distributions statistiques, les 4 critères et les traces tour par tour.
-          </p>
-        </div>
+      {/* Export IA & Générateur de Journal Textuel Unitaire */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
+          <div>
+            <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              Journaux Textuels Pas-à-Pas, Export Prompt IA & Référentiel v2.0
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Simulez une partie sur la graine et l’Édition de votre choix ou téléchargez le bilan Markdown structuré prêt à être soumis à une IA.
+            </p>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-3">
           {selectedCampaign && (
-            <>
+            <div className="flex items-center gap-2 text-xs">
               <select
                 value={selectedCampaign.id}
-                onChange={(e) => {
-                  setSelectedTraceIdx(0);
-                  onSelectCampaign(e.target.value);
-                }}
-                className="text-xs font-medium bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2"
+                onChange={(e) => onSelectCampaign(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
               >
                 {campaigns.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -149,266 +106,225 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
                   </option>
                 ))}
               </select>
-
               <a
                 href={getMarkdownExportUrl(selectedCampaign.id)}
                 download
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-md transition-colors whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded"
               >
-                <FileText className="w-3.5 h-3.5" />
-                Télécharger Bilan IA (.md)
+                <Download className="w-3.5 h-3.5" />
+                Télécharger Prompt IA (.md)
               </a>
-
               <a
                 href={getJsonExportUrl(selectedCampaign.id)}
                 download
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 border border-slate-300 dark:border-slate-700 rounded-md transition-colors whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded"
               >
                 <Download className="w-3.5 h-3.5" />
-                Télécharger JSON Complet
+                JSON
               </a>
-            </>
+            </div>
           )}
         </div>
-      </section>
 
-      {/* Sélecteur de sous-mode */}
-      <div className="flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg w-fit">
-        <button
-          onClick={() => setActiveSubMode('report')}
-          className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-            activeSubMode === 'report'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
+        {/* Simulateur de partie unitaire */}
+        <form
+          onSubmit={handleRunSingle}
+          className="flex flex-wrap items-end gap-3 text-xs"
         >
-          Rapport Structuré Prompt-Ready (.md)
-        </button>
-        <button
-          onClick={() => setActiveSubMode('traces')}
-          className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-            activeSubMode === 'traces'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
-        >
-          Journaux Capturés ({availableTraces.length})
-        </button>
-        <button
-          onClick={() => setActiveSubMode('single')}
-          className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-            activeSubMode === 'single'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-          }`}
-        >
-          Générateur de Trace par Graine (Seed)
-        </button>
+          <div>
+            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Graine (Seed)
+            </label>
+            <input
+              type="number"
+              value={seed}
+              onChange={(e) => setSeed(Number(e.target.value) || 1)}
+              className="w-32 px-2.5 py-1.5 font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            />
+          </div>
+
+          <div>
+            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Édition (Ensemble d’Interrupteurs)
+            </label>
+            <select
+              value={selectedEditionId}
+              onChange={(e) => setSelectedEditionId(e.target.value)}
+              className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              {editions.map((ed) => (
+                <option key={ed.id} value={ed.id}>
+                  {ed.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Profil des Bots
+            </label>
+            <select
+              value={botProfile}
+              onChange={(e) => setBotProfile(e.target.value as BotProfileId)}
+              className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              {(Object.keys(BOT_PROFILE_META) as BotProfileId[]).map((b) => (
+                <option key={b} value={b}>
+                  {BOT_PROFILE_META[b].label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="submit"
+            disabled={runningSingle}
+            className="inline-flex items-center gap-1.5 px-4 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded"
+          >
+            <Play className="w-3.5 h-3.5" />
+            {runningSingle
+              ? 'Génération...'
+              : 'Générer le Journal Textuel Complet'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard.writeText(sampleJournalText);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded hover:bg-slate-200"
+          >
+            <Copy className="w-3.5 h-3.5" />
+            {copied ? 'Copié !' : 'Copier le journal'}
+          </button>
+        </form>
+
+        {/* Affichage du Journal Textuel */}
+        <div className="relative">
+          <pre className="p-4 rounded-lg bg-slate-950 text-slate-100 font-mono text-xs overflow-x-auto max-h-[480px] leading-relaxed whitespace-pre-wrap">
+            {sampleJournalText}
+          </pre>
+        </div>
       </div>
 
-      {/* Sous-mode 1 : Rapport Markdown complet pour IA */}
-      {activeSubMode === 'report' && selectedCampaign && (
-        <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                Aperçu du Rapport Markdown Structuré pour Analyse IA
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Copiez ce bloc ou téléchargez le fichier .md pour le soumettre directement à une IA.
-              </p>
+      {/* Référentiel des 6 Interrupteurs V1↔V2, 6 Tactiques et Dictionnaire Bilingue */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-emerald-600" />
+            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+              Référentiel des 6 Interrupteurs Mécaniques (Édition 1.0 ↔ Édition 2.0)
+            </h2>
+          </div>
+          <div className="space-y-2.5 text-xs">
+            {SWITCH_KEYS.map((key) => {
+              const meta = SWITCH_META[key];
+              return (
+                <div
+                  key={key}
+                  className="p-3 rounded border border-slate-200 dark:border-slate-800 space-y-1"
+                >
+                  <div className="font-bold text-slate-900 dark:text-slate-100">
+                    {meta.title} ({meta.shortCode})
+                  </div>
+                  <div className="text-slate-600 dark:text-slate-400">
+                    <strong className="text-amber-700 dark:text-amber-400">
+                      {meta.v1Label} :
+                    </strong>{' '}
+                    {meta.v1HumanDesc}
+                  </div>
+                  <div className="text-slate-600 dark:text-slate-400">
+                    <strong className="text-emerald-700 dark:text-emerald-400">
+                      {meta.v2Label} :
+                    </strong>{' '}
+                    {meta.v2HumanDesc}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          {/* Les 6 Tactiques */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+              Les 6 Tuiles Tactiques du Contremaître (A1..B3)
+            </h2>
+            <div className="space-y-2 text-xs">
+              {Object.entries(TACTIC_DESCRIPTIONS).map(([id, t]) => (
+                <div
+                  key={id}
+                  className="p-2.5 rounded bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800"
+                >
+                  <div className="font-bold text-slate-900 dark:text-slate-100">
+                    {t.name}
+                  </div>
+                  <div className="text-slate-600 dark:text-slate-400 mt-0.5">
+                    {t.ruleSummary}
+                  </div>
+                </div>
+              ))}
             </div>
-            <button
-              onClick={() => copyToClipboard(markdownReport, true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 border border-slate-300 dark:border-slate-700 rounded-md transition-colors whitespace-nowrap"
-            >
-              {copiedReport ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  Copié dans le presse-papiers
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  Copier le Prompt Markdown
-                </>
-              )}
-            </button>
           </div>
 
-          <pre className="p-4 bg-slate-950 text-slate-100 font-mono text-xs leading-relaxed rounded-lg overflow-x-auto max-h-[640px] overflow-y-auto border border-slate-800">
-            {markdownReport}
-          </pre>
-        </section>
-      )}
-
-      {/* Sous-mode 2 : Inspecteur des traces capturées */}
-      {activeSubMode === 'traces' && (
-        <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                Choisir un journal d’exécution capturé durant la campagne
-              </label>
-              <select
-                value={safeTraceIdx}
-                onChange={(e) => setSelectedTraceIdx(Number(e.target.value))}
-                className="w-full text-xs font-mono bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-md px-3 py-2"
-              >
-                {availableTraces.map((tr, idx) => (
-                  <option key={tr.id} value={idx}>
-                    {tr.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {activeTrace && (
+          {/* Dictionnaire Thématique i18n */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                Table de Correspondance i18n (Amazonia ↔ Abstrait)
+              </h2>
               <button
-                onClick={() => copyToClipboard(activeTrace.journal, false)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 border border-slate-300 dark:border-slate-700 rounded-md transition-colors whitespace-nowrap shrink-0 mt-5"
+                onClick={() =>
+                  onChangeVocabulary(
+                    vocabulary === 'AMAZONIA' ? 'ABSTRACT' : 'AMAZONIA'
+                  )
+                }
+                className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
               >
-                {copiedTrace ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    Journal copié
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    Copier ce journal
-                  </>
-                )}
+                Basculer ({vocabulary})
               </button>
-            )}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                    <th className="py-1.5 px-2">Clé</th>
+                    <th className="py-1.5 px-2">Thème Amazonia</th>
+                    <th className="py-1.5 px-2">Notes Techniques</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {(
+                    Object.keys(DICTIONARIES.AMAZONIA) as Array<
+                      keyof typeof DICTIONARIES.AMAZONIA
+                    >
+                  ).map((k) => {
+                    const vAmz = DICTIONARIES.AMAZONIA[k];
+                    const vAbs = DICTIONARIES.ABSTRACT[k];
+                    return (
+                      <tr key={k}>
+                        <td className="py-1.5 px-2 font-mono text-[11px] text-slate-500">
+                          {k}
+                        </td>
+                        <td className="py-1.5 px-2 font-medium">
+                          {Array.isArray(vAmz) ? vAmz.join(', ') : vAmz}
+                        </td>
+                        <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400">
+                          {Array.isArray(vAbs) ? vAbs.join(', ') : vAbs}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-
-          {activeTrace ? (
-            <pre className="p-4 bg-slate-950 text-slate-100 font-mono text-xs leading-relaxed rounded-lg overflow-x-auto max-h-[640px] overflow-y-auto border border-slate-800">
-              {activeTrace.journal}
-            </pre>
-          ) : (
-            <p className="text-xs text-slate-500 py-8 text-center">
-              Aucune trace disponible pour cette campagne.
-            </p>
-          )}
-        </section>
-      )}
-
-      {/* Sous-mode 3 : Générateur de trace unitaire par Seed */}
-      {activeSubMode === 'single' && (
-        <section className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg space-y-5">
-          <form
-            onSubmit={handleRunSingle}
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 items-end pb-4 border-b border-slate-200 dark:border-slate-800"
-          >
-            <div>
-              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                Seed aléatoire
-              </label>
-              <input
-                type="number"
-                value={customSeed}
-                onChange={(e) => setCustomSeed(Number(e.target.value) || 1)}
-                className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                Joueurs (n)
-              </label>
-              <select
-                value={customN}
-                onChange={(e) => setCustomN(Number(e.target.value))}
-                className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md"
-              >
-                {[3, 4, 5, 6].map((v) => (
-                  <option key={v} value={v}>
-                    n = {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                Parcelles (q)
-              </label>
-              <select
-                value={customQ}
-                onChange={(e) => setCustomQ(Number(e.target.value))}
-                className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md"
-              >
-                {[4, 5, 6, 7, 8].map((v) => (
-                  <option key={v} value={v}>
-                    q = {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                Arbres (a)
-              </label>
-              <select
-                value={customA}
-                onChange={(e) => setCustomA(Number(e.target.value))}
-                className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md"
-              >
-                {[1, 2, 3].map((v) => (
-                  <option key={v} value={v}>
-                    a = {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                Tours (x)
-              </label>
-              <select
-                value={customX}
-                onChange={(e) => setCustomX(Number(e.target.value))}
-                className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md"
-              >
-                {[6, 7, 8, 9, 10].map((v) => (
-                  <option key={v} value={v}>
-                    x = {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-                Profil des Bots
-              </label>
-              <select
-                value={customBot}
-                onChange={(e) => setCustomBot(e.target.value as BotProfileId)}
-                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md"
-              >
-                {(Object.keys(BOT_PROFILE_META) as BotProfileId[]).map((bId) => (
-                  <option key={bId} value={bId}>
-                    {BOT_PROFILE_META[bId].shortLabel}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <button
-                type="submit"
-                disabled={loadingSingle}
-                className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-md transition-colors whitespace-nowrap"
-              >
-                <Play className="w-3.5 h-3.5" />
-                Générer Trace
-              </button>
-            </div>
-          </form>
-
-          <pre className="p-4 bg-slate-950 text-slate-100 font-mono text-xs leading-relaxed rounded-lg overflow-x-auto max-h-[640px] overflow-y-auto border border-slate-800">
-            {singleJournal || 'Génération du journal en cours...'}
-          </pre>
-        </section>
-      )}
+        </div>
+      </div>
     </div>
   );
 };

@@ -4,28 +4,44 @@ import {
   BotProfileId,
   CampaignConfig,
   CampaignRecord,
+  EditionPreset,
   GameParameters,
+  MechanicalSwitches,
+  PinnedSeed,
   SingleGameResult,
-  StressTestTelemetry,
   TableConfig,
   TacticId,
   VariantEvaluationResult,
 } from '../sim/types';
-import { DEFAULT_GAME_PARAMETERS, DEFAULT_TABLE_CONFIGS } from '../sim/i18n';
+import {
+  BUILTIN_EDITIONS,
+  countSwitchesChangedFromV1,
+  DEFAULT_GAME_PARAMETERS,
+  DEFAULT_TABLE_CONFIGS,
+  V1_SWITCHES,
+  V2_SWITCHES,
+} from '../sim/i18n';
 import { createEmptyEdgeCases, runSingleGame } from '../sim/engine';
 import {
   addEdgeCases,
-  evaluateFourCriteria,
+  evaluateFiveCriteria,
+  evaluateFourDiagnosticAxes,
+  expandAblationVariants,
   expandParameterSweep,
   summarizeTableGames,
 } from '../sim/evaluator';
 import { SeededRNG } from '../sim/rng';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data', 'campaigns');
+const DATA_ROOT = path.resolve(process.cwd(), 'data');
+const CAMPAIGNS_DIR = path.join(DATA_ROOT, 'campaigns');
+const EDITIONS_DIR = path.join(DATA_ROOT, 'editions');
+const SEEDS_DIR = path.join(DATA_ROOT, 'seeds');
 
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+function ensureDataDirs(): void {
+  for (const dir of [CAMPAIGNS_DIR, EDITIONS_DIR, SEEDS_DIR]) {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
   }
 }
 
@@ -41,6 +57,12 @@ const CALIBRATION_TABLES: TableConfig[] = [
     name: 'Étalon Égoïste / Myope (N1)',
     description: 'Sans communication ni recherche de destruction multiple',
     botProfiles: ['SELFISH'],
+  },
+  {
+    id: 'cal_blind_prob',
+    name: 'Étalon Aveugle Probabiliste (N2 Sans Gobelet)',
+    description: 'Même intelligence coopérative N2 mais sans regarder son dé secret (Axe D)',
+    botProfiles: ['BLIND_PROB'],
   },
   {
     id: 'cal_coop',
@@ -64,30 +86,260 @@ const CALIBRATION_TABLES: TableConfig[] = [
 
 export class CampaignManager {
   private campaigns: Map<string, CampaignRecord> = new Map();
+  private editions: Map<string, EditionPreset> = new Map();
+  private pinnedSeeds: Map<string, PinnedSeed> = new Map();
   private activeControl: Map<
     string,
     { paused: boolean; stopped: boolean; lastSavedAt: number }
   > = new Map();
 
   constructor() {
-    ensureDataDir();
-    this.loadFromDisk();
+    ensureDataDirs();
+    this.loadEditionsFromDisk();
+    this.loadSeedsFromDisk();
+    this.loadCampaignsFromDisk();
     if (this.campaigns.size === 0) {
       this.createInitialReferenceCampaigns();
     }
   }
 
-  private loadFromDisk(): void {
+  // ============================================================================
+  // NIVEAU 1 DU CONSERVATOIRE : ÉDITIONS & VARIANTES SAUVEGARDÉES
+  // ============================================================================
+  private loadEditionsFromDisk(): void {
+    for (const builtin of BUILTIN_EDITIONS) {
+      this.editions.set(builtin.id, builtin);
+      const fp = path.join(EDITIONS_DIR, `${builtin.id}.json`);
+      if (!fs.existsSync(fp)) {
+        fs.writeFileSync(fp, JSON.stringify(builtin, null, 2), 'utf-8');
+      }
+    }
+
     try {
-      const files = fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.json'));
+      const files = fs.readdirSync(EDITIONS_DIR).filter((f) => f.endsWith('.json'));
       for (const file of files) {
-        const fullPath = path.join(DATA_DIR, file);
+        const raw = fs.readFileSync(path.join(EDITIONS_DIR, file), 'utf-8');
+        const ed = JSON.parse(raw) as EditionPreset;
+        if (ed && ed.id && ed.switches) {
+          this.editions.set(ed.id, ed);
+        }
+      }
+    } catch (err) {
+      console.error('Erreur chargement éditions :', err);
+    }
+  }
+
+  public listEditions(): EditionPreset[] {
+    return Array.from(this.editions.values()).sort((a, b) => {
+      if (a.isBuiltIn && !b.isBuiltIn) return -1;
+      if (!a.isBuiltIn && b.isBuiltIn) return 1;
+      return a.id.localeCompare(b.id);
+    });
+  }
+
+  public getEdition(id: string): EditionPreset | undefined {
+    return this.editions.get(id);
+  }
+
+  public saveEdition(input: {
+    id?: string;
+    name: string;
+    version?: string;
+    description?: string;
+    switches: MechanicalSwitches;
+    defaultParams?: Partial<GameParameters>;
+  }): EditionPreset {
+    ensureDataDirs();
+    const id = input.id || `ed-custom-${Date.now()}`;
+    const existing = this.editions.get(id);
+
+    const preset: EditionPreset = {
+      id,
+      name: input.name,
+      version: input.version || '2.x-custom',
+      description:
+        input.description ||
+        'Variante personnalisée enregistrée dans le Conservatoire.',
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      isBuiltIn: existing?.isBuiltIn || false,
+      switches: { ...input.switches },
+      defaultParams: {
+        ...DEFAULT_GAME_PARAMETERS,
+        ...(input.defaultParams || {}),
+        ...input.switches,
+      },
+    };
+
+    this.editions.set(id, preset);
+    fs.writeFileSync(path.join(EDITIONS_DIR, `${id}.json`), JSON.stringify(preset, null, 2), 'utf-8');
+    return preset;
+  }
+
+  public deleteEdition(id: string): boolean {
+    const ed = this.editions.get(id);
+    if (!ed || ed.isBuiltIn) return false;
+    this.editions.delete(id);
+    const fp = path.join(EDITIONS_DIR, `${id}.json`);
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    return true;
+  }
+
+  // ============================================================================
+  // NIVEAU 3 DU CONSERVATOIRE : GRAINES REMARQUABLES ÉPINGLÉES
+  // ============================================================================
+  private loadSeedsFromDisk(): void {
+    try {
+      const files = fs.readdirSync(SEEDS_DIR).filter((f) => f.endsWith('.json'));
+      for (const file of files) {
+        const raw = fs.readFileSync(path.join(SEEDS_DIR, file), 'utf-8');
+        const ps = JSON.parse(raw) as PinnedSeed;
+        if (ps && ps.id && ps.title) {
+          this.pinnedSeeds.set(ps.id, ps);
+        }
+      }
+    } catch (err) {
+      console.error('Erreur chargement graines épinglées :', err);
+    }
+
+    if (this.pinnedSeeds.size === 0) {
+      this.createInitialPinnedSeeds();
+    }
+  }
+
+  private createInitialPinnedSeeds(): void {
+    const paramsV1: GameParameters = { ...DEFAULT_GAME_PARAMETERS, ...V1_SWITCHES };
+    const paramsV2: GameParameters = { ...DEFAULT_GAME_PARAMETERS, ...V2_SWITCHES };
+
+    const initialSeeds: PinnedSeed[] = [
+      {
+        id: 'seed_ref_42001',
+        seed: 42001,
+        title: 'Graine #42001 — Contraste maximal V1.0 ↔ V2.0 (Cas H1 & Parade unitaire)',
+        reasonCategory: 'MAX_DELTA_V1_V2',
+        description:
+          'Illustre comment le Déploiement de secours H1 (V2) évite un tour mort au Tour 1 tout en valorisant la parade unitaire (1 carte = 1 défenseur).',
+        createdAt: new Date().toISOString(),
+        campaignId: 'camp_v2_ablation_v1_vs_v2',
+        defaultParamsA: paramsV1,
+        defaultParamsB: paramsV2,
+        editionAName: 'Édition 1.0 — Règles Originales',
+        editionBName: 'Édition 2.0 — Refonte Coopérative & Simplifiée',
+        botProfile: 'COOPERATIVE',
+        scoreANormalized: 0.71,
+        scoreBNormalized: 0.79,
+      },
+      {
+        id: 'seed_ref_42007',
+        seed: 42007,
+        title: 'Graine #42007 — Sauvetage décisif grâce au dé secret sous gobelet (Axe D)',
+        reasonCategory: 'MAX_SECRET_CUP_IMPACT',
+        description:
+          'Le joueur ayant tiré un 5 sous son gobelet anticipe dès l’Étape 1 un assaut surprise en Case 5 de la Piste des Tactiques que le Bot Aveugle ignore.',
+        createdAt: new Date().toISOString(),
+        campaignId: 'camp_v2_ablation_v1_vs_v2',
+        defaultParamsA: paramsV1,
+        defaultParamsB: paramsV2,
+        editionAName: 'Édition 1.0 — Règles Originales',
+        editionBName: 'Édition 2.0 — Refonte Coopérative & Simplifiée',
+        botProfile: 'COOPERATIVE',
+        scoreANormalized: 0.67,
+        scoreBNormalized: 0.83,
+      },
+      {
+        id: 'seed_ref_900012',
+        seed: 900012,
+        title: 'Graine #900012 — Cascade de Rancune & Avalanche (Snowball Contremaître)',
+        reasonCategory: 'CRITICAL_DEFEAT',
+        description:
+          'Montre comment une table Égoïste (N1) subit un effet boule de neige de la Rancune, tandis que la table Coopérative (N2) en Édition 2.0 stabilise la forêt.',
+        createdAt: new Date().toISOString(),
+        campaignId: 'camp_v2_stress_verification',
+        defaultParamsA: paramsV1,
+        defaultParamsB: paramsV2,
+        editionAName: 'Édition 1.0 — Règles Originales',
+        editionBName: 'Édition 2.0 — Refonte Coopérative & Simplifiée',
+        botProfile: 'COOPERATIVE',
+        scoreANormalized: 0.46,
+        scoreBNormalized: 0.75,
+      },
+    ];
+    for (const s of initialSeeds) {
+      this.savePinnedSeed(s);
+    }
+  }
+
+  public listPinnedSeeds(): PinnedSeed[] {
+    return Array.from(this.pinnedSeeds.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  public savePinnedSeed(
+    input: Partial<PinnedSeed> & { seed: number; title: string }
+  ): PinnedSeed {
+    ensureDataDirs();
+    const id = input.id || `seed_${input.seed}_${Date.now()}`;
+    const ps: PinnedSeed = {
+      id,
+      seed: Number(input.seed),
+      title: input.title,
+      reasonCategory: input.reasonCategory || 'USER_PINNED',
+      description:
+        input.description ||
+        'Graine épinglée pour inspection comparative côte-à-côte.',
+      createdAt: input.createdAt || new Date().toISOString(),
+      campaignId: input.campaignId,
+      defaultParamsA:
+        input.defaultParamsA || { ...DEFAULT_GAME_PARAMETERS, ...V1_SWITCHES },
+      defaultParamsB:
+        input.defaultParamsB || { ...DEFAULT_GAME_PARAMETERS, ...V2_SWITCHES },
+      editionAName: input.editionAName || 'Édition 1.0 — Règles Originales',
+      editionBName:
+        input.editionBName || 'Édition 2.0 — Refonte Coopérative & Simplifiée',
+      botProfile: input.botProfile || 'COOPERATIVE',
+      scoreANormalized: input.scoreANormalized ?? 0.7,
+      scoreBNormalized: input.scoreBNormalized ?? 0.78,
+    };
+    this.pinnedSeeds.set(id, ps);
+    fs.writeFileSync(path.join(SEEDS_DIR, `${id}.json`), JSON.stringify(ps, null, 2), 'utf-8');
+    return ps;
+  }
+
+  public deletePinnedSeed(id: string): boolean {
+    const exists = this.pinnedSeeds.has(id);
+    if (!exists) return false;
+    this.pinnedSeeds.delete(id);
+    const fp = path.join(SEEDS_DIR, `${id}.json`);
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    return true;
+  }
+
+  // ============================================================================
+  // NIVEAU 2 DU CONSERVATOIRE : CAMPAGNES & BANCS D'ESSAI
+  // ============================================================================
+  private loadCampaignsFromDisk(): void {
+    try {
+      const files = fs.readdirSync(CAMPAIGNS_DIR).filter((f) => f.endsWith('.json'));
+      for (const file of files) {
+        const fullPath = path.join(CAMPAIGNS_DIR, file);
         const raw = fs.readFileSync(fullPath, 'utf-8');
         const record = JSON.parse(raw) as CampaignRecord;
-        // Si le serveur a redémarré pendant qu'une campagne était RUNNING, la passer en PAUSED pour permettre sa reprise
+        const isV2Compatible =
+          record.config?.type === 'ORACLE_STRESS_TEST'
+            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.BLIND_PROB)
+            : record.variantResults.length === 0 ||
+              (Boolean(record.variantResults[0]?.criteria?.simplicitySobriety) &&
+                Boolean(record.variantResults[0]?.diagnosticAxes));
+
+        if (!isV2Compatible) {
+          fs.unlinkSync(fullPath);
+          continue;
+        }
+
         if (record.status === 'RUNNING') {
           record.status = 'PAUSED';
-          record.progress.currentPhaseLabel = 'Interrompu par redémarrage serveur (Prêt à reprendre)';
+          record.progress.currentPhaseLabel =
+            'Interrompu par redémarrage serveur (Prêt à reprendre)';
         }
         this.campaigns.set(record.id, record);
       }
@@ -98,8 +350,8 @@ export class CampaignManager {
 
   public saveToDisk(record: CampaignRecord): void {
     try {
-      ensureDataDir();
-      const filePath = path.join(DATA_DIR, `${record.id}.json`);
+      ensureDataDirs();
+      const filePath = path.join(CAMPAIGNS_DIR, `${record.id}.json`);
       fs.writeFileSync(filePath, JSON.stringify(record, null, 2), 'utf-8');
     } catch (err) {
       console.error(`Erreur sauvegarde campagne ${record.id} :`, err);
@@ -123,7 +375,7 @@ export class CampaignManager {
       this.activeControl.delete(id);
     }
     this.campaigns.delete(id);
-    const filePath = path.join(DATA_DIR, `${id}.json`);
+    const filePath = path.join(CAMPAIGNS_DIR, `${id}.json`);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
@@ -146,7 +398,7 @@ export class CampaignManager {
   public resumeCampaign(id: string): CampaignRecord | undefined {
     const record = this.campaigns.get(id);
     if (!record) return undefined;
-    let ctrl = this.activeControl.get(id);
+    const ctrl = this.activeControl.get(id);
     if (ctrl) {
       ctrl.paused = false;
       record.status = 'RUNNING';
@@ -177,11 +429,14 @@ export class CampaignManager {
 
   public startCampaign(config: CampaignConfig): CampaignRecord {
     const now = new Date().toISOString();
-    const variants = expandParameterSweep(config.sweep);
+    const variants =
+      config.type === 'AB_ABLATION' && config.ablationConfig
+        ? expandAblationVariants(config.sweep, config.ablationConfig)
+        : expandParameterSweep(config.sweep);
     const totalVariants = variants.length;
 
     let totalTargetGames = 0;
-    if (config.type === 'EVALUATION_SWEEP') {
+    if (config.type === 'EVALUATION_SWEEP' || config.type === 'AB_ABLATION') {
       const tablesCount = config.includeCalibrationTables
         ? config.selectedTableConfigs.length + CALIBRATION_TABLES.length
         : config.selectedTableConfigs.length;
@@ -204,7 +459,7 @@ export class CampaignManager {
         totalVariants,
         elapsedSeconds: 0,
         gamesPerSecond: 0,
-        currentPhaseLabel: 'Initialisation du moteur asynchrone...',
+        currentPhaseLabel: 'Initialisation du moteur asynchrone v2.0...',
       },
       variantResults: [],
       stressTelemetry:
@@ -225,6 +480,7 @@ export class CampaignManager {
               scoreDistributionByBotLevel: {
                 RANDOM: { games: 0, meanNormalized: 0, minNormalized: 1, maxNormalized: 0, defeatRate: 0, miracleRate: 0 },
                 SELFISH: { games: 0, meanNormalized: 0, minNormalized: 1, maxNormalized: 0, defeatRate: 0, miracleRate: 0 },
+                BLIND_PROB: { games: 0, meanNormalized: 0, minNormalized: 1, maxNormalized: 0, defeatRate: 0, miracleRate: 0 },
                 COOPERATIVE: { games: 0, meanNormalized: 0, minNormalized: 1, maxNormalized: 0, defeatRate: 0, miracleRate: 0 },
                 STRATEGIST: { games: 0, meanNormalized: 0, minNormalized: 1, maxNormalized: 0, defeatRate: 0, miracleRate: 0 },
                 OMNISCIENT: { games: 0, meanNormalized: 0, minNormalized: 1, maxNormalized: 0, defeatRate: 0, miracleRate: 0 },
@@ -237,7 +493,7 @@ export class CampaignManager {
     this.campaigns.set(record.id, record);
     this.saveToDisk(record);
 
-    if (config.type === 'EVALUATION_SWEEP') {
+    if (config.type === 'EVALUATION_SWEEP' || config.type === 'AB_ABLATION') {
       this.runEvaluationSweepLoop(record, variants);
     } else {
       this.runStressTestLoop(record);
@@ -246,32 +502,39 @@ export class CampaignManager {
     return record;
   }
 
-  /**
-   * Boucle asynchrone non bloquante pour les campagnes d'Évaluation Multi-Variantes (Type 1)
-   */
   private runEvaluationSweepLoop(
     record: CampaignRecord,
-    variants: Array<{ variantId: string; variantLabel: string; params: GameParameters }>
+    variants: ReturnType<typeof expandParameterSweep>
   ): void {
     const ctrl = { paused: false, stopped: false, lastSavedAt: Date.now() };
     this.activeControl.set(record.id, ctrl);
 
     const startTimeMs = Date.now();
     let currentVariantIdx = 0;
-    let seedCounter = record.config.baseSeed || 10000;
 
     const userTables =
       record.config.selectedTableConfigs.length > 0
         ? record.config.selectedTableConfigs
-        : [DEFAULT_TABLE_CONFIGS[0], DEFAULT_TABLE_CONFIGS[1], DEFAULT_TABLE_CONFIGS[2]];
+        : [
+            DEFAULT_TABLE_CONFIGS[0],
+            DEFAULT_TABLE_CONFIGS[1],
+            DEFAULT_TABLE_CONFIGS[2],
+            DEFAULT_TABLE_CONFIGS[3],
+          ];
 
-    // Combiner les tables sélectionnées et les tables d'étalonnage sans doublons inutiles
-    const allTablesToRun: Array<{ table: TableConfig; isUserSelected: boolean; calKey?: 'random' | 'selfish' | 'cooperative' | 'strategist' | 'omniscient' }> = [];
+    type CalKey = 'random' | 'selfish' | 'blindProb' | 'cooperative' | 'strategist' | 'omniscient';
+    const allTablesToRun: Array<{
+      table: TableConfig;
+      isUserSelected: boolean;
+      calKey?: CalKey;
+    }> = [];
+
     for (const ut of userTables) {
-      let calKey: 'random' | 'selfish' | 'cooperative' | 'strategist' | 'omniscient' | undefined;
+      let calKey: CalKey | undefined;
       if (ut.botProfiles.length === 1) {
         if (ut.botProfiles[0] === 'RANDOM') calKey = 'random';
         else if (ut.botProfiles[0] === 'SELFISH') calKey = 'selfish';
+        else if (ut.botProfiles[0] === 'BLIND_PROB') calKey = 'blindProb';
         else if (ut.botProfiles[0] === 'COOPERATIVE') calKey = 'cooperative';
         else if (ut.botProfiles[0] === 'STRATEGIST') calKey = 'strategist';
         else if (ut.botProfiles[0] === 'OMNISCIENT') calKey = 'omniscient';
@@ -280,16 +543,21 @@ export class CampaignManager {
     }
 
     if (record.config.includeCalibrationTables) {
-      const calMap: Array<{ table: TableConfig; key: 'random' | 'selfish' | 'cooperative' | 'strategist' | 'omniscient' }> = [
+      const calMap: Array<{ table: TableConfig; key: CalKey }> = [
         { table: CALIBRATION_TABLES[0], key: 'random' },
         { table: CALIBRATION_TABLES[1], key: 'selfish' },
-        { table: CALIBRATION_TABLES[2], key: 'cooperative' },
-        { table: CALIBRATION_TABLES[3], key: 'strategist' },
-        { table: CALIBRATION_TABLES[4], key: 'omniscient' },
+        { table: CALIBRATION_TABLES[2], key: 'blindProb' },
+        { table: CALIBRATION_TABLES[3], key: 'cooperative' },
+        { table: CALIBRATION_TABLES[4], key: 'strategist' },
+        { table: CALIBRATION_TABLES[5], key: 'omniscient' },
       ];
       for (const item of calMap) {
         if (!allTablesToRun.some((t) => t.calKey === item.key)) {
-          allTablesToRun.push({ table: item.table, isUserSelected: false, calKey: item.key });
+          allTablesToRun.push({
+            table: item.table,
+            isUserSelected: false,
+            calKey: item.key,
+          });
         }
       }
     }
@@ -297,16 +565,18 @@ export class CampaignManager {
     record.progress.totalTargetGames =
       variants.length * allTablesToRun.length * record.config.gamesPerVariantAndTable;
 
-    // État interne de la variante en cours de calcul
     let currentTableIdx = 0;
     let currentGameInTable = 0;
     let currentTableGames: SingleGameResult[] = [];
     let variantTableSummaries: VariantEvaluationResult['tableSummaries'] = [];
     let variantSampleTraces: VariantEvaluationResult['sampleTraces'] = [];
     let variantEdgeCases = createEmptyEdgeCases();
+    let variantAllSimulatedGames: SingleGameResult[] = [];
+
     let gamesByCat: {
       random: SingleGameResult[];
       selfish: SingleGameResult[];
+      blindProb: SingleGameResult[];
       cooperative: SingleGameResult[];
       strategist: SingleGameResult[];
       omniscient: SingleGameResult[];
@@ -314,6 +584,7 @@ export class CampaignManager {
     } = {
       random: [],
       selfish: [],
+      blindProb: [],
       cooperative: [],
       strategist: [],
       omniscient: [],
@@ -331,19 +602,14 @@ export class CampaignManager {
       }
 
       const sliceStart = Date.now();
-      // Exécuter des parties par tranches de ~25ms pour garder le serveur Express ultra-réactif
       while (Date.now() - sliceStart < 25 && currentVariantIdx < variants.length) {
         const vSpec = variants[currentVariantIdx];
         const tSpec = allTablesToRun[currentTableIdx];
         const targetG = record.config.gamesPerVariantAndTable;
 
-        // Utiliser la même séquence de graines pour chaque table d'une même variante (Réduction de variance CRN !)
+        // Réduction de variance par Graines Appariées (Paired Seeds / CRN)
         const gameSeed =
-          (record.config.baseSeed || 10000) +
-          currentVariantIdx * 100000 +
-          currentGameInTable +
-          1;
-        seedCounter = gameSeed;
+          (record.config.baseSeed || 42000) + currentGameInTable + 1;
 
         const shouldRecordTrace = currentGameInTable < 2;
         const gRes = runSingleGame(
@@ -355,6 +621,7 @@ export class CampaignManager {
         );
 
         currentTableGames.push(gRes);
+        variantAllSimulatedGames.push(gRes);
         addEdgeCases(variantEdgeCases, gRes.edgeCases);
 
         if (tSpec.isUserSelected) {
@@ -382,7 +649,6 @@ export class CampaignManager {
         record.progress.completedGames++;
 
         if (currentGameInTable >= targetG) {
-          // Fin de cette table pour cette variante
           if (tSpec.isUserSelected) {
             const summary = summarizeTableGames(
               tSpec.table.id,
@@ -396,17 +662,48 @@ export class CampaignManager {
           currentTableIdx++;
 
           if (currentTableIdx >= allTablesToRun.length) {
-            // Fin de toutes les tables pour cette variante -> Évaluer les 4 critères !
-            const criteria = evaluateFourCriteria(vSpec.params, gamesByCat);
-            record.variantResults.push({
+            const criteria = evaluateFiveCriteria(vSpec.params, gamesByCat);
+            const diagnosticAxes = evaluateFourDiagnosticAxes(vSpec.params, gamesByCat);
+
+            let violationsCount = 0;
+            let totalStagnantTurns = 0;
+            let tacticMonopolyGamesCount = 0;
+            const AllTactics: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
+
+            for (const g of variantAllSimulatedGames) {
+              violationsCount += g.violations.length;
+              totalStagnantTurns += g.stagnantTurns;
+              if (AllTactics.some((t) => g.tacticSlot1Turns[t] >= vSpec.params.x * 0.85)) {
+                tacticMonopolyGamesCount++;
+              }
+            }
+
+            const totalTurns = Math.max(
+              1,
+              variantAllSimulatedGames.length * vSpec.params.x
+            );
+
+            const vResult: VariantEvaluationResult = {
               variantId: vSpec.variantId,
               variantLabel: vSpec.variantLabel,
+              ablationCategory: vSpec.ablationCategory,
+              modifiedSwitchesFromA: vSpec.modifiedSwitchesFromA,
+              switchesChangedCountFromV1: countSwitchesChangedFromV1(vSpec.params),
               params: vSpec.params,
               tableSummaries: variantTableSummaries,
               criteria,
+              diagnosticAxes,
               edgeCaseTotals: variantEdgeCases,
+              stagnantTurnsRate: totalStagnantTurns / totalTurns,
+              slot1MonopolyGamesRate:
+                variantAllSimulatedGames.length > 0
+                  ? tacticMonopolyGamesCount / variantAllSimulatedGames.length
+                  : 0,
+              invariantViolationsCount: violationsCount,
               sampleTraces: variantSampleTraces.slice(0, 6),
-            });
+            };
+
+            record.variantResults.push(vResult);
 
             record.progress.completedVariants++;
             currentVariantIdx++;
@@ -414,9 +711,11 @@ export class CampaignManager {
             variantTableSummaries = [];
             variantSampleTraces = [];
             variantEdgeCases = createEmptyEdgeCases();
+            variantAllSimulatedGames = [];
             gamesByCat = {
               random: [],
               selfish: [],
+              blindProb: [],
               cooperative: [],
               strategist: [],
               omniscient: [],
@@ -454,31 +753,37 @@ export class CampaignManager {
     setImmediate(stepBatch);
   }
 
-  /**
-   * Boucle asynchrone de Stress-Test Longue Durée sur VM Oracle (Type 2)
-   * Explore des milliers / millions de parties en arrière-plan pour vérifier tous les invariants (I1-I4)
-   * et traquer les situations inextricables, sans issue ou cycliques.
-   */
   private runStressTestLoop(record: CampaignRecord): void {
     const ctrl = { paused: false, stopped: false, lastSavedAt: Date.now() };
     this.activeControl.set(record.id, ctrl);
 
     const startTimeMs = Date.now() - (record.progress.elapsedSeconds || 0) * 1000;
     const variants = expandParameterSweep(record.config.sweep);
-    const paramRng = new SeededRNG((record.config.baseSeed || 77777) + record.progress.completedGames);
-    const botLevels: BotProfileId[] = ['COOPERATIVE', 'STRATEGIST', 'SELFISH', 'OMNISCIENT', 'RANDOM'];
+    const paramRng = new SeededRNG(
+      (record.config.baseSeed || 77777) + record.progress.completedGames
+    );
+    const botLevels: BotProfileId[] = [
+      'COOPERATIVE',
+      'STRATEGIST',
+      'SELFISH',
+      'BLIND_PROB',
+      'OMNISCIENT',
+      'RANDOM',
+    ];
 
     const telemetry = record.stressTelemetry!;
-    // Accumulateurs pour les moyennes incrémentales par niveau de bot
-    const botSums: Record<BotProfileId, { sumNorm: number; defeats: number; miracles: number }> = {
+    const botSums: Record<
+      BotProfileId,
+      { sumNorm: number; defeats: number; miracles: number }
+    > = {
       RANDOM: { sumNorm: 0, defeats: 0, miracles: 0 },
       SELFISH: { sumNorm: 0, defeats: 0, miracles: 0 },
+      BLIND_PROB: { sumNorm: 0, defeats: 0, miracles: 0 },
       COOPERATIVE: { sumNorm: 0, defeats: 0, miracles: 0 },
       STRATEGIST: { sumNorm: 0, defeats: 0, miracles: 0 },
       OMNISCIENT: { sumNorm: 0, defeats: 0, miracles: 0 },
     };
 
-    // Initialiser les accumulateurs si c'est une reprise
     for (const b of botLevels) {
       const existing = telemetry.scoreDistributionByBotLevel[b];
       if (existing && existing.games > 0) {
@@ -514,7 +819,6 @@ export class CampaignManager {
         const gameIdx = telemetry.totalGamesSimulated;
         const seed = (record.config.baseSeed || 900000) + gameIdx + 1;
 
-        // Choisir les paramètres (soit parmi la grille, soit mutés aléatoirement si randomizeParametersInStress est actif)
         let params: GameParameters;
         if (record.config.randomizeParametersInStress) {
           params = {
@@ -522,8 +826,10 @@ export class CampaignManager {
             q: paramRng.nextInt(4, 8),
             a: paramRng.nextInt(1, 3),
             x: paramRng.nextInt(6, 10),
-            stockAbatteuses: paramRng.nextFloat() < 0.7 ? null : paramRng.nextInt(4, 12),
-            modeTirageDes: (['MIN_2D6', '1D6', 'MAX_2D6'] as const)[paramRng.nextInt(0, 2)],
+            stockAbatteuses:
+              paramRng.nextFloat() < 0.7 ? null : paramRng.nextInt(4, 12),
+            // MAX_2D6 est strictement exclu des stress-tests aléatoires
+            modeTirageDes: (['MIN_2D6', '1D6'] as const)[paramRng.nextInt(0, 1)],
             modeResolutionParcelle:
               paramRng.nextFloat() < 0.8 ? 'TRANSACTION_FIGEE' : 'SEQUENTIEL',
             ordreCasse:
@@ -537,6 +843,26 @@ export class CampaignManager {
             )[paramRng.nextInt(0, 2)],
             nbRegeneration: paramRng.nextInt(0, 2),
             rMaxCycles: 5,
+            ruleNoTargetH1:
+              paramRng.nextFloat() < 0.5
+                ? 'V1_NO_EFFECT'
+                : 'V2_FALLBACK_DEPLOY_AND_RETREAT',
+            ruleParryMode:
+              paramRng.nextFloat() < 0.5
+                ? 'V1_UNLIMITED_PER_CELL'
+                : 'V2_UNITARY_PER_CARD',
+            rulePreventiveDestruction:
+              paramRng.nextFloat() < 0.5 ? 'V1_ALLOWED' : 'V2_CARD_REQUIRED',
+            ruleBulldozerTargeting:
+              paramRng.nextFloat() < 0.5
+                ? 'V1_SCRAPYARD_ZERO_AND_REVERSE_TIE'
+                : 'V2_FOREST_PRIORITY_AND_UNIFIED_TIE',
+            ruleScrapyardExit:
+              paramRng.nextFloat() < 0.5 ? 'V1_PASSIVE_D1' : 'V2_OFFENSIVE_D2',
+            ruleInitialSetup:
+              paramRng.nextFloat() < 0.5
+                ? 'V1_SPARSE_RANK3_EMPTY'
+                : 'V2_SMOOTH_DENSE',
           };
         } else {
           params = variants[gameIdx % variants.length].params;
@@ -549,11 +875,9 @@ export class CampaignManager {
 
         telemetry.totalGamesSimulated += 1;
         telemetry.totalTurnsSimulated += params.x;
-        // 4 invariants vérifiés à chaque tour (2 fois par tour + setup + fin de partie)
         telemetry.invariantsVerifiedCount += (params.x * 2 + 2) * 4;
         addEdgeCases(telemetry.edgeCaseOccurrences, res.edgeCases);
 
-        // Mise à jour des distributions par niveau de Bot
         const bStat = telemetry.scoreDistributionByBotLevel[chosenBot];
         const bSum = botSums[chosenBot];
         bStat.games += 1;
@@ -566,7 +890,6 @@ export class CampaignManager {
         bStat.defeatRate = bSum.defeats / bStat.games;
         bStat.miracleRate = bSum.miracles / bStat.games;
 
-        // Détection d'anomalies, cas extrêmes ou situations sans issue
         let captureCategory:
           | 'INVARIANT_VIOLATION'
           | 'EARLY_WIPEOUT'
@@ -632,7 +955,6 @@ export class CampaignManager {
           captureSummary = `Forte concentration de cas limites en une seule partie (${totalEdgeInGame} occurrences H1-H4).`;
         }
 
-        // Si un cas remarquable est détecté et qu'on a moins de 12 journaux capturés, on rejoue exactement la graine avec recordTraces: true !
         if (captureCategory && telemetry.capturedExtremeLogs.length < 12) {
           const alreadyHasCategoryCount = telemetry.capturedExtremeLogs.filter(
             (l) => l.category === captureCategory
@@ -691,48 +1013,59 @@ export class CampaignManager {
     setImmediate(stepStressBatch);
   }
 
-  /**
-   * Crée au premier démarrage deux campagnes de référence pré-calculées :
-   * 1. Une campagne d'Équilibrage Multi-Variantes comparant les règles officielles (Transaction figée, min(2d6), PAR_CASE)
-   *    à 2 variantes alternatives sur les différentes configurations de table.
-   * 2. Une campagne de Stress-Test & Vérification Formelle sur 1 500 parties avec journaux des cas limites.
-   */
   private createInitialReferenceCampaigns(): void {
-    const evalConfig: CampaignConfig = {
-      id: 'camp_ref_equilibrage_amazonia',
-      name: 'Campagne de Référence — Règles Officielles vs Variantes de Rancune & Tirage',
-      type: 'EVALUATION_SWEEP',
+    const ablationConfig: CampaignConfig = {
+      id: 'camp_v2_ablation_v1_vs_v2',
+      name: 'Test Croisé & Ablation de Référence — Édition 1.0 (Origine) ↔ Édition 2.0 (Refonte)',
+      type: 'AB_ABLATION',
       createdAt: new Date().toISOString(),
-      gamesPerVariantAndTable: 80,
+      gamesPerVariantAndTable: 45,
+      ablationConfig: {
+        editionAId: 'ed-v1-original',
+        editionBId: 'ed-v2-refonte',
+        editionASwitches: { ...V1_SWITCHES },
+        editionBSwitches: { ...V2_SWITCHES },
+        editionAName: 'Édition 1.0 — Règles Originales',
+        editionBName: 'Édition 2.0 — Refonte Coopérative & Simplifiée',
+        includeLayer2SingleAdditions: true,
+        includeLayer3SingleAblations: true,
+        includeLayer4FullFactorial: false,
+      },
       sweep: {
         nValues: [4],
         qValues: [6],
         aValues: [2],
         xValues: [8],
         stockAbatteusesValues: [null],
-        modeTirageDesValues: ['MIN_2D6', '1D6'],
+        modeTirageDesValues: ['MIN_2D6'],
         modeResolutionParcelleValues: ['TRANSACTION_FIGEE'],
         ordreCasseValues: ['AVANT_PARCELLE_1'],
         immobiliteReparationValues: [true],
         ordreMajTactiquesValues: ['ORDRE_PISTE_TAC'],
         rancuneTerrassementDegradeValues: [false],
-        granulariteRancuneValues: ['PAR_CASE', 'PAR_EVENEMENT'],
+        granulariteRancuneValues: ['PAR_CASE'],
         nbRegenerationValues: [1],
+        ruleNoTargetH1Values: ['V1_NO_EFFECT'],
+        ruleParryModeValues: ['V1_UNLIMITED_PER_CELL'],
+        rulePreventiveDestructionValues: ['V1_ALLOWED'],
+        ruleBulldozerTargetingValues: ['V1_SCRAPYARD_ZERO_AND_REVERSE_TIE'],
+        ruleScrapyardExitValues: ['V1_PASSIVE_D1'],
+        ruleInitialSetupValues: ['V1_SPARSE_RANK3_EMPTY'],
       },
       selectedTableConfigs: [
         DEFAULT_TABLE_CONFIGS[0], // Coopératif N2
         DEFAULT_TABLE_CONFIGS[1], // Stratège N3
         DEFAULT_TABLE_CONFIGS[2], // Égoïste N1
-        DEFAULT_TABLE_CONFIGS[3], // Table Mixte
-        DEFAULT_TABLE_CONFIGS[4], // Omniscient
+        DEFAULT_TABLE_CONFIGS[3], // Aveugle Probabiliste
+        DEFAULT_TABLE_CONFIGS[5], // Omniscient
       ],
       includeCalibrationTables: true,
       baseSeed: 42000,
     };
 
     const stressConfig: CampaignConfig = {
-      id: 'camp_ref_stress_verification',
-      name: 'Vérification Formelle Initiale — Invariants I1-I4 & Cas Limites H1-H7',
+      id: 'camp_v2_stress_verification',
+      name: 'Vérification Formelle v2.0 — 64 Hybrides V1/V2, Invariants I1-I4 & Cas Limites H1-H7b',
       type: 'ORACLE_STRESS_TEST',
       createdAt: new Date().toISOString(),
       gamesPerVariantAndTable: 100,
@@ -750,6 +1083,24 @@ export class CampaignManager {
         rancuneTerrassementDegradeValues: [false],
         granulariteRancuneValues: ['PAR_CASE'],
         nbRegenerationValues: [1],
+        ruleNoTargetH1Values: [V1_SWITCHES.ruleNoTargetH1, V2_SWITCHES.ruleNoTargetH1],
+        ruleParryModeValues: [V1_SWITCHES.ruleParryMode, V2_SWITCHES.ruleParryMode],
+        rulePreventiveDestructionValues: [
+          V1_SWITCHES.rulePreventiveDestruction,
+          V2_SWITCHES.rulePreventiveDestruction,
+        ],
+        ruleBulldozerTargetingValues: [
+          V1_SWITCHES.ruleBulldozerTargeting,
+          V2_SWITCHES.ruleBulldozerTargeting,
+        ],
+        ruleScrapyardExitValues: [
+          V1_SWITCHES.ruleScrapyardExit,
+          V2_SWITCHES.ruleScrapyardExit,
+        ],
+        ruleInitialSetupValues: [
+          V1_SWITCHES.ruleInitialSetup,
+          V2_SWITCHES.ruleInitialSetup,
+        ],
       },
       selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
       includeCalibrationTables: true,
@@ -759,7 +1110,7 @@ export class CampaignManager {
       baseSeed: 900000,
     };
 
-    this.startCampaign(evalConfig);
+    this.startCampaign(ablationConfig);
     this.startCampaign(stressConfig);
   }
 }
