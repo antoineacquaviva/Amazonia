@@ -19,8 +19,8 @@ import {
 } from '../sim/i18n';
 import {
   compareSeedSideBySide,
-  getJsonExportUrl,
-  getMarkdownExportUrl,
+  downloadCampaignJson,
+  downloadCampaignMarkdown,
   removeEditionPreset,
   removePinnedSeedApi,
   saveEditionPreset,
@@ -625,24 +625,24 @@ export const ConservatoryView: React.FC<ConservatoryViewProps> = ({
                             <ExternalLink className="w-3 h-3" />
                             Ouvrir
                           </button>
-                          <a
-                            href={getMarkdownExportUrl(c.id)}
-                            download
+                          <button
+                            type="button"
+                            onClick={() => downloadCampaignMarkdown(c)}
                             className="inline-flex items-center gap-1 px-2 py-1 text-xs text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded hover:bg-slate-200"
                             title="Télécharger le bilan Markdown structuré pour IA"
                           >
                             <Download className="w-3 h-3" />
                             .md
-                          </a>
-                          <a
-                            href={getJsonExportUrl(c.id)}
-                            download
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => downloadCampaignJson(c)}
                             className="inline-flex items-center gap-1 px-2 py-1 text-xs text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded hover:bg-slate-200"
                             title="Télécharger l'archive JSON complète"
                           >
                             <Download className="w-3 h-3" />
                             .json
-                          </a>
+                          </button>
                           <button
                             onClick={() => onDeleteCampaign(c.id)}
                             className="p-1 text-slate-400 hover:text-red-600"

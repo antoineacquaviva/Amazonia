@@ -15,8 +15,8 @@ import {
   TACTIC_DESCRIPTIONS,
 } from '../sim/i18n';
 import {
-  getJsonExportUrl,
-  getMarkdownExportUrl,
+  downloadCampaignJson,
+  downloadCampaignMarkdown,
   simulateSingleGameTrace,
 } from '../api';
 import { Copy, Download, FileText, Play } from 'lucide-react';
@@ -106,22 +106,22 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
                   </option>
                 ))}
               </select>
-              <a
-                href={getMarkdownExportUrl(selectedCampaign.id)}
-                download
+              <button
+                type="button"
+                onClick={() => downloadCampaignMarkdown(selectedCampaign)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded"
               >
                 <Download className="w-3.5 h-3.5" />
                 Télécharger Prompt IA (.md)
-              </a>
-              <a
-                href={getJsonExportUrl(selectedCampaign.id)}
-                download
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadCampaignJson(selectedCampaign)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded"
               >
                 <Download className="w-3.5 h-3.5" />
                 JSON
-              </a>
+              </button>
             </div>
           )}
         </div>

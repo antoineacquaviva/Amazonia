@@ -333,6 +333,7 @@ async function startServer() {
     const distPath = path.resolve(process.cwd(), 'dist');
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath));
+      app.use('/:subpath', express.static(distPath));
       app.get('*', (_req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
       });

@@ -6,8 +6,8 @@ import {
 } from '../sim/types';
 import { SWITCH_KEYS, SWITCH_META, TACTIC_DESCRIPTIONS } from '../sim/i18n';
 import {
-  getJsonExportUrl,
-  getMarkdownExportUrl,
+  downloadCampaignJson,
+  downloadCampaignMarkdown,
   saveEditionPreset,
 } from '../api';
 import {
@@ -167,22 +167,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             )}
 
-            <a
-              href={getMarkdownExportUrl(selectedCampaign.id)}
-              download
+            <button
+              type="button"
+              onClick={() => downloadCampaignMarkdown(selectedCampaign)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-md transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
               Rapport Markdown IA (.md)
-            </a>
-            <a
-              href={getJsonExportUrl(selectedCampaign.id)}
-              download
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadCampaignJson(selectedCampaign)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-md transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
               JSON Complet
-            </a>
+            </button>
             <button
               onClick={() => onDeleteCampaign(selectedCampaign.id)}
               className="p-1.5 text-slate-400 hover:text-red-600"

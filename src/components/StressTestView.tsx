@@ -10,7 +10,7 @@ import {
   DEFAULT_TABLE_CONFIGS,
   V2_SWITCHES,
 } from '../sim/i18n';
-import { getJsonExportUrl, getMarkdownExportUrl } from '../api';
+import { downloadCampaignJson, downloadCampaignMarkdown } from '../api';
 import {
   AlertOctagon,
   CheckCircle2,
@@ -236,20 +236,20 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
                     <Square className="w-3.5 h-3.5" /> Arrêter
                   </button>
                 )}
-                <a
-                  href={getMarkdownExportUrl(activeStress.id)}
-                  download
+                <button
+                  type="button"
+                  onClick={() => downloadCampaignMarkdown(activeStress)}
                   className="inline-flex items-center gap-1 px-3 py-1.5 font-semibold text-white bg-emerald-700 rounded"
                 >
                   <Download className="w-3.5 h-3.5" /> Export .md
-                </a>
-                <a
-                  href={getJsonExportUrl(activeStress.id)}
-                  download
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadCampaignJson(activeStress)}
                   className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded"
                 >
                   <Download className="w-3.5 h-3.5" /> .json
-                </a>
+                </button>
               </div>
             </div>
 
