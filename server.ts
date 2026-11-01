@@ -1,7 +1,11 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { CampaignManager } from './src/server/campaignManager';
+import {
+  CampaignManager,
+  TOTAL_CPU_CORES,
+  WORKER_POOL_SIZE,
+} from './src/server/campaignManager';
 import {
   CampaignConfig,
   GameParameters,
@@ -31,6 +35,8 @@ async function startServer() {
       version: '2.0.0',
       environment: process.env.NODE_ENV || 'development',
       port: Number(process.env.PORT) || 3000,
+      cpuCount: TOTAL_CPU_CORES,
+      workersCount: WORKER_POOL_SIZE,
       activeCampaigns: campaignManager
         .listCampaigns()
         .filter((c) => c.status === 'RUNNING').length,

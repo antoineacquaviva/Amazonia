@@ -1,5 +1,7 @@
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { Worker } from 'node:worker_threads';
 import {
   BotProfileId,
   CampaignConfig,
@@ -31,6 +33,18 @@ import {
   summarizeTableGames,
 } from '../sim/evaluator';
 import { SeededRNG } from '../sim/rng';
+import {
+  EvalBatchWorkerRequest,
+  EvalBatchWorkerResponse,
+  StressBatchWorkerRequest,
+  StressBatchWorkerResponse,
+  WorkerRequestMessage,
+  WorkerResponseMessage,
+} from './simWorker';
+
+export const TOTAL_CPU_CORES = Math.max(1, os.cpus()?.length || 1);
+export const WORKER_POOL_SIZE = Math.max(1, TOTAL_CPU_CORES - 1);
+const PERIODIC_SAVE_INTERVAL_MS = 15000; // 15 secondes entre deux écritures disque asynchrones
 
 const DATA_ROOT = path.resolve(process.cwd(), 'data');
 const CAMPAIGNS_DIR = path.join(DATA_ROOT, 'campaigns');
@@ -84,6 +98,203 @@ const CALIBRATION_TABLES: TableConfig[] = [
   },
 ];
 
+// ============================================================================
+// POOL DE WORKERS MULTI-CŒURS (node:worker_threads + tsx)
+// ============================================================================
+interface QueuedWorkerTask {
+  request: WorkerRequestMessage;
+  resolve: (res: WorkerResponseMessage) => void;
+  reject: (err: Error) => void;
+}
+
+class SimulationWorkerPool {
+  private workers: Worker[] = [];
+  private idleWorkers: Worker[] = [];
+  private activeTasks: Map<Worker, QueuedWorkerTask> = new Map();
+  private queue: QueuedWorkerTask[] = [];
+  private nextTaskId = 1;
+  private initialized = false;
+  private workerFailedPermanently = false;
+
+  private initPool(): void {
+    if (this.initialized || this.workerFailedPermanently) return;
+    this.initialized = true;
+    const workerScript = path.resolve(process.cwd(), 'src/server/simWorker.ts');
+
+    for (let i = 0; i < WORKER_POOL_SIZE; i++) {
+      try {
+        const w = new Worker(workerScript, {
+          execArgv: ['--import', 'tsx'],
+        });
+
+        w.on('message', (msg: WorkerResponseMessage) => {
+          const currentTask = this.activeTasks.get(w);
+          this.activeTasks.delete(w);
+          this.idleWorkers.push(w);
+          if (currentTask) {
+            currentTask.resolve(msg);
+          }
+          this.dispatchNext();
+        });
+
+        w.on('error', (err) => {
+          console.error('[WorkerPool] Erreur worker thread, repli local :', err);
+          const currentTask = this.activeTasks.get(w);
+          this.activeTasks.delete(w);
+          this.workers = this.workers.filter((x) => x !== w);
+          this.idleWorkers = this.idleWorkers.filter((x) => x !== w);
+          if (this.workers.length === 0) {
+            this.workerFailedPermanently = true;
+          }
+          if (currentTask) {
+            this.runFallbackInProcess(currentTask.request)
+              .then(currentTask.resolve)
+              .catch(currentTask.reject);
+          }
+          this.dispatchNext();
+        });
+
+        this.workers.push(w);
+        this.idleWorkers.push(w);
+      } catch (err) {
+        console.error('[WorkerPool] Impossible de créer un worker :', err);
+        this.workerFailedPermanently = true;
+        break;
+      }
+    }
+  }
+
+  private dispatchNext(): void {
+    if (this.workerFailedPermanently) {
+      while (this.queue.length > 0) {
+        const task = this.queue.shift()!;
+        this.runFallbackInProcess(task.request)
+          .then(task.resolve)
+          .catch(task.reject);
+      }
+      return;
+    }
+
+    while (this.idleWorkers.length > 0 && this.queue.length > 0) {
+      const worker = this.idleWorkers.shift()!;
+      const task = this.queue.shift()!;
+      this.activeTasks.set(worker, task);
+      worker.postMessage(task.request);
+    }
+  }
+
+  private async runFallbackInProcess(
+    msg: WorkerRequestMessage
+  ): Promise<WorkerResponseMessage> {
+    if (msg.type === 'RUN_EVAL_BATCH') {
+      const results: SingleGameResult[] = [];
+      for (const job of msg.jobs) {
+        results.push(
+          runSingleGame(job.seed, msg.params, msg.tableId, msg.botProfiles, {
+            recordTraces: job.recordTrace,
+          })
+        );
+      }
+      return {
+        taskId: msg.taskId,
+        type: 'RUN_EVAL_BATCH_RESULT',
+        results,
+      };
+    } else {
+      const outcomes: StressBatchWorkerResponse['outcomes'] = [];
+      const allTactics: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
+      for (const job of msg.jobs) {
+        const res = runSingleGame(
+          job.seed,
+          job.params,
+          `stress_${job.botProfile}`,
+          [job.botProfile],
+          { recordTraces: false }
+        );
+        let captureCategory: StressBatchWorkerResponse['outcomes'][0]['captureCategory'] =
+          null;
+        let captureSummary = '';
+        if (res.violations.length > 0) {
+          captureCategory = 'INVARIANT_VIOLATION';
+          captureSummary = res.violations[0].message;
+        } else if (res.stagnantTurns > 0) {
+          captureCategory = 'STAGNATION';
+          captureSummary = `${res.stagnantTurns} tour(s) stagnant(s).`;
+        } else if (res.earlyWipeoutTurn !== null) {
+          captureCategory = 'EARLY_WIPEOUT';
+          captureSummary = `Destruction totale dès le tour ${res.earlyWipeoutTurn}.`;
+        } else if (
+          allTactics.some((t) => res.tacticSlot1Turns[t] === job.params.x)
+        ) {
+          captureCategory = 'TACTIC_MONOPOLY';
+          captureSummary = `Monopole Case 1 pendant ${job.params.x} tours.`;
+        } else if (
+          job.botProfile === 'OMNISCIENT' &&
+          res.victoryBracket === 'DEFEAT'
+        ) {
+          captureCategory = 'OMNISCIENT_DEFEAT';
+          captureSummary = `Défaite du Bot Omniscient.`;
+        }
+        outcomes.push({
+          seed: job.seed,
+          params: job.params,
+          botProfile: job.botProfile,
+          res,
+          captureCategory,
+          captureSummary,
+        });
+      }
+      return {
+        taskId: msg.taskId,
+        type: 'RUN_STRESS_BATCH_RESULT',
+        outcomes,
+      };
+    }
+  }
+
+  public runEvalBatch(
+    payload: Omit<EvalBatchWorkerRequest, 'taskId' | 'type'>
+  ): Promise<EvalBatchWorkerResponse> {
+    this.initPool();
+    const taskId = this.nextTaskId++;
+    const request: EvalBatchWorkerRequest = {
+      taskId,
+      type: 'RUN_EVAL_BATCH',
+      ...payload,
+    };
+    return new Promise<EvalBatchWorkerResponse>((resolve, reject) => {
+      this.queue.push({
+        request,
+        resolve: resolve as (res: WorkerResponseMessage) => void,
+        reject,
+      });
+      this.dispatchNext();
+    });
+  }
+
+  public runStressBatch(
+    payload: Omit<StressBatchWorkerRequest, 'taskId' | 'type'>
+  ): Promise<StressBatchWorkerResponse> {
+    this.initPool();
+    const taskId = this.nextTaskId++;
+    const request: StressBatchWorkerRequest = {
+      taskId,
+      type: 'RUN_STRESS_BATCH',
+      ...payload,
+    };
+    return new Promise<StressBatchWorkerResponse>((resolve, reject) => {
+      this.queue.push({
+        request,
+        resolve: resolve as (res: WorkerResponseMessage) => void,
+        reject,
+      });
+      this.dispatchNext();
+    });
+  }
+}
+
+const sharedWorkerPool = new SimulationWorkerPool();
+
 export class CampaignManager {
   private campaigns: Map<string, CampaignRecord> = new Map();
   private editions: Map<string, EditionPreset> = new Map();
@@ -92,6 +303,7 @@ export class CampaignManager {
     string,
     { paused: boolean; stopped: boolean; lastSavedAt: number }
   > = new Map();
+  private savingInFlight: Set<string> = new Set();
 
   constructor() {
     ensureDataDirs();
@@ -171,7 +383,11 @@ export class CampaignManager {
     };
 
     this.editions.set(id, preset);
-    fs.writeFileSync(path.join(EDITIONS_DIR, `${id}.json`), JSON.stringify(preset, null, 2), 'utf-8');
+    void fs.promises.writeFile(
+      path.join(EDITIONS_DIR, `${id}.json`),
+      JSON.stringify(preset, null, 2),
+      'utf-8'
+    );
     return preset;
   }
 
@@ -301,7 +517,11 @@ export class CampaignManager {
       scoreBNormalized: input.scoreBNormalized ?? 0.78,
     };
     this.pinnedSeeds.set(id, ps);
-    fs.writeFileSync(path.join(SEEDS_DIR, `${id}.json`), JSON.stringify(ps, null, 2), 'utf-8');
+    void fs.promises.writeFile(
+      path.join(SEEDS_DIR, `${id}.json`),
+      JSON.stringify(ps, null, 2),
+      'utf-8'
+    );
     return ps;
   }
 
@@ -348,13 +568,21 @@ export class CampaignManager {
     }
   }
 
-  public saveToDisk(record: CampaignRecord): void {
+  /**
+   * Sauvegarde asynchrone non-bloquante via fs.promises.writeFile
+   */
+  public async saveToDiskAsync(record: CampaignRecord): Promise<void> {
+    if (this.savingInFlight.has(record.id)) return;
+    this.savingInFlight.add(record.id);
     try {
       ensureDataDirs();
       const filePath = path.join(CAMPAIGNS_DIR, `${record.id}.json`);
-      fs.writeFileSync(filePath, JSON.stringify(record, null, 2), 'utf-8');
+      const payload = JSON.stringify(record, null, 2);
+      await fs.promises.writeFile(filePath, payload, 'utf-8');
     } catch (err) {
-      console.error(`Erreur sauvegarde campagne ${record.id} :`, err);
+      console.error(`Erreur sauvegarde asynchrone campagne ${record.id} :`, err);
+    } finally {
+      this.savingInFlight.delete(record.id);
     }
   }
 
@@ -390,7 +618,7 @@ export class CampaignManager {
       record.status = 'PAUSED';
       record.updatedAt = new Date().toISOString();
       record.progress.currentPhaseLabel = 'En pause (Supervision utilisateur)';
-      this.saveToDisk(record);
+      void this.saveToDiskAsync(record);
     }
     return record;
   }
@@ -403,10 +631,10 @@ export class CampaignManager {
       ctrl.paused = false;
       record.status = 'RUNNING';
       record.updatedAt = new Date().toISOString();
-      record.progress.currentPhaseLabel = 'Reprise de la simulation en arrière-plan...';
+      record.progress.currentPhaseLabel = `Reprise sur ${WORKER_POOL_SIZE} worker(s) CPU...`;
     } else if (record.status === 'PAUSED' && record.config.type === 'ORACLE_STRESS_TEST') {
       record.status = 'RUNNING';
-      this.runStressTestLoop(record);
+      void this.runStressTestLoop(record);
     }
     return record;
   }
@@ -422,7 +650,7 @@ export class CampaignManager {
       record.completedAt = new Date().toISOString();
       record.updatedAt = record.completedAt;
       record.progress.currentPhaseLabel = 'Arrêté et consolidé sur demande';
-      this.saveToDisk(record);
+      void this.saveToDiskAsync(record);
     }
     return record;
   }
@@ -459,7 +687,7 @@ export class CampaignManager {
         totalVariants,
         elapsedSeconds: 0,
         gamesPerSecond: 0,
-        currentPhaseLabel: 'Initialisation du moteur asynchrone v2.0...',
+        currentPhaseLabel: `Initialisation sur ${WORKER_POOL_SIZE} worker(s) multi-cœurs (${TOTAL_CPU_CORES} vCPU détectés)...`,
       },
       variantResults: [],
       stressTelemetry:
@@ -491,27 +719,28 @@ export class CampaignManager {
     };
 
     this.campaigns.set(record.id, record);
-    this.saveToDisk(record);
+    void this.saveToDiskAsync(record);
 
     if (config.type === 'EVALUATION_SWEEP' || config.type === 'AB_ABLATION') {
-      this.runEvaluationSweepLoop(record, variants);
+      void this.runEvaluationSweepLoop(record, variants);
     } else {
-      this.runStressTestLoop(record);
+      void this.runStressTestLoop(record);
     }
 
     return record;
   }
 
-  private runEvaluationSweepLoop(
+  // ============================================================================
+  // EXÉCUTION MULTI-CŒURS : BALAYAGE & ABLATION CROISÉE (Paired Seeds)
+  // ============================================================================
+  private async runEvaluationSweepLoop(
     record: CampaignRecord,
     variants: ReturnType<typeof expandParameterSweep>
-  ): void {
+  ): Promise<void> {
     const ctrl = { paused: false, stopped: false, lastSavedAt: Date.now() };
     this.activeControl.set(record.id, ctrl);
 
     const startTimeMs = Date.now();
-    let currentVariantIdx = 0;
-
     const userTables =
       record.config.selectedTableConfigs.length > 0
         ? record.config.selectedTableConfigs
@@ -562,198 +791,201 @@ export class CampaignManager {
       }
     }
 
+    const targetG = record.config.gamesPerVariantAndTable;
     record.progress.totalTargetGames =
-      variants.length * allTablesToRun.length * record.config.gamesPerVariantAndTable;
+      variants.length * allTablesToRun.length * targetG;
 
-    let currentTableIdx = 0;
-    let currentGameInTable = 0;
-    let currentTableGames: SingleGameResult[] = [];
-    let variantTableSummaries: VariantEvaluationResult['tableSummaries'] = [];
-    let variantSampleTraces: VariantEvaluationResult['sampleTraces'] = [];
-    let variantEdgeCases = createEmptyEdgeCases();
-    let variantAllSimulatedGames: SingleGameResult[] = [];
+    const baseSeed = record.config.baseSeed || 42000;
+    const chunkSize = Math.max(
+      10,
+      Math.min(40, Math.ceil(targetG / Math.max(1, WORKER_POOL_SIZE)))
+    );
 
-    let gamesByCat: {
-      random: SingleGameResult[];
-      selfish: SingleGameResult[];
-      blindProb: SingleGameResult[];
-      cooperative: SingleGameResult[];
-      strategist: SingleGameResult[];
-      omniscient: SingleGameResult[];
-      allPrimaryGames: SingleGameResult[];
-    } = {
-      random: [],
-      selfish: [],
-      blindProb: [],
-      cooperative: [],
-      strategist: [],
-      omniscient: [],
-      allPrimaryGames: [],
-    };
+    for (let vIdx = 0; vIdx < variants.length; vIdx++) {
+      if (ctrl.stopped) break;
+      const vSpec = variants[vIdx];
 
-    const stepBatch = () => {
-      if (ctrl.stopped) {
-        this.activeControl.delete(record.id);
-        return;
-      }
-      if (ctrl.paused) {
-        setTimeout(stepBatch, 200);
-        return;
-      }
+      record.progress.currentPhaseLabel = `[${WORKER_POOL_SIZE} workers] Variante ${vIdx + 1}/${variants.length} (${vSpec.variantLabel})`;
 
-      const sliceStart = Date.now();
-      while (Date.now() - sliceStart < 25 && currentVariantIdx < variants.length) {
-        const vSpec = variants[currentVariantIdx];
-        const tSpec = allTablesToRun[currentTableIdx];
-        const targetG = record.config.gamesPerVariantAndTable;
+      const tableGamesMap: SingleGameResult[][] = allTablesToRun.map(() => []);
+      const chunkPromises: Promise<void>[] = [];
 
-        // Réduction de variance par Graines Appariées (Paired Seeds / CRN)
-        const gameSeed =
-          (record.config.baseSeed || 42000) + currentGameInTable + 1;
+      for (let tIdx = 0; tIdx < allTablesToRun.length; tIdx++) {
+        const tSpec = allTablesToRun[tIdx];
 
-        const shouldRecordTrace = currentGameInTable < 2;
-        const gRes = runSingleGame(
-          gameSeed,
-          vSpec.params,
-          tSpec.table.id,
-          tSpec.table.botProfiles,
-          { recordTraces: shouldRecordTrace }
-        );
-
-        currentTableGames.push(gRes);
-        variantAllSimulatedGames.push(gRes);
-        addEdgeCases(variantEdgeCases, gRes.edgeCases);
-
-        if (tSpec.isUserSelected) {
-          gamesByCat.allPrimaryGames.push(gRes);
-          if (shouldRecordTrace && gRes.textualJournal) {
-            variantSampleTraces.push({
-              seed: gRes.seed,
-              tableConfigName: tSpec.table.name,
-              rawScore: gRes.rawScore,
-              normalizedScore: gRes.normalizedScore,
-              victoryBracket: gRes.victoryBracket,
-              tag:
-                gRes.normalizedScore >= 0.48 && gRes.normalizedScore <= 0.78
-                  ? 'HIGH_TENSION'
-                  : 'TYPICAL',
-              textualJournal: gRes.textualJournal,
+        for (let startG = 0; startG < targetG; startG += chunkSize) {
+          const endG = Math.min(targetG, startG + chunkSize);
+          const jobs: Array<{ seed: number; recordTrace: boolean }> = [];
+          for (let g = startG; g < endG; g++) {
+            jobs.push({
+              seed: baseSeed + g + 1,
+              recordTrace: tSpec.isUserSelected && g < 2,
             });
           }
-        }
-        if (tSpec.calKey) {
-          gamesByCat[tSpec.calKey].push(gRes);
-        }
 
-        currentGameInTable++;
-        record.progress.completedGames++;
-
-        if (currentGameInTable >= targetG) {
-          if (tSpec.isUserSelected) {
-            const summary = summarizeTableGames(
-              tSpec.table.id,
-              tSpec.table.name,
-              currentTableGames
-            );
-            variantTableSummaries.push(summary);
-          }
-          currentTableGames = [];
-          currentGameInTable = 0;
-          currentTableIdx++;
-
-          if (currentTableIdx >= allTablesToRun.length) {
-            const criteria = evaluateFiveCriteria(vSpec.params, gamesByCat);
-            const diagnosticAxes = evaluateFourDiagnosticAxes(vSpec.params, gamesByCat);
-
-            let violationsCount = 0;
-            let totalStagnantTurns = 0;
-            let tacticMonopolyGamesCount = 0;
-            const AllTactics: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
-
-            for (const g of variantAllSimulatedGames) {
-              violationsCount += g.violations.length;
-              totalStagnantTurns += g.stagnantTurns;
-              if (AllTactics.some((t) => g.tacticSlot1Turns[t] >= vSpec.params.x * 0.85)) {
-                tacticMonopolyGamesCount++;
-              }
+          const p = (async () => {
+            while (ctrl.paused && !ctrl.stopped) {
+              await new Promise((r) => setTimeout(r, 200));
             }
+            if (ctrl.stopped) return;
 
-            const totalTurns = Math.max(
-              1,
-              variantAllSimulatedGames.length * vSpec.params.x
-            );
-
-            const vResult: VariantEvaluationResult = {
-              variantId: vSpec.variantId,
-              variantLabel: vSpec.variantLabel,
-              ablationCategory: vSpec.ablationCategory,
-              modifiedSwitchesFromA: vSpec.modifiedSwitchesFromA,
-              switchesChangedCountFromV1: countSwitchesChangedFromV1(vSpec.params),
+            const resp = await sharedWorkerPool.runEvalBatch({
               params: vSpec.params,
-              tableSummaries: variantTableSummaries,
-              criteria,
-              diagnosticAxes,
-              edgeCaseTotals: variantEdgeCases,
-              stagnantTurnsRate: totalStagnantTurns / totalTurns,
-              slot1MonopolyGamesRate:
-                variantAllSimulatedGames.length > 0
-                  ? tacticMonopolyGamesCount / variantAllSimulatedGames.length
-                  : 0,
-              invariantViolationsCount: violationsCount,
-              sampleTraces: variantSampleTraces.slice(0, 6),
-            };
+              tableId: tSpec.table.id,
+              botProfiles: tSpec.table.botProfiles,
+              jobs,
+            });
 
-            record.variantResults.push(vResult);
+            if (ctrl.stopped) return;
 
-            record.progress.completedVariants++;
-            currentVariantIdx++;
-            currentTableIdx = 0;
-            variantTableSummaries = [];
-            variantSampleTraces = [];
-            variantEdgeCases = createEmptyEdgeCases();
-            variantAllSimulatedGames = [];
-            gamesByCat = {
-              random: [],
-              selfish: [],
-              blindProb: [],
-              cooperative: [],
-              strategist: [],
-              omniscient: [],
-              allPrimaryGames: [],
-            };
-          }
+            tableGamesMap[tIdx].push(...resp.results);
+            record.progress.completedGames += resp.results.length;
+            const elapsedSec = Math.max(0.05, (Date.now() - startTimeMs) / 1000);
+            record.progress.elapsedSeconds = elapsedSec;
+            record.progress.gamesPerSecond =
+              record.progress.completedGames / elapsedSec;
+            record.updatedAt = new Date().toISOString();
+
+            if (Date.now() - ctrl.lastSavedAt >= PERIODIC_SAVE_INTERVAL_MS) {
+              ctrl.lastSavedAt = Date.now();
+              void this.saveToDiskAsync(record);
+            }
+          })();
+
+          chunkPromises.push(p);
         }
       }
 
+      await Promise.all(chunkPromises);
+      if (ctrl.stopped) break;
+
+      // Agrégation déterministe par table (triée par graine pour reproductibilité stricte)
+      const variantTableSummaries: VariantEvaluationResult['tableSummaries'] = [];
+      const variantSampleTraces: VariantEvaluationResult['sampleTraces'] = [];
+      const variantEdgeCases = createEmptyEdgeCases();
+      const variantAllSimulatedGames: SingleGameResult[] = [];
+      const gamesByCat: {
+        random: SingleGameResult[];
+        selfish: SingleGameResult[];
+        blindProb: SingleGameResult[];
+        cooperative: SingleGameResult[];
+        strategist: SingleGameResult[];
+        omniscient: SingleGameResult[];
+        allPrimaryGames: SingleGameResult[];
+      } = {
+        random: [],
+        selfish: [],
+        blindProb: [],
+        cooperative: [],
+        strategist: [],
+        omniscient: [],
+        allPrimaryGames: [],
+      };
+
+      for (let tIdx = 0; tIdx < allTablesToRun.length; tIdx++) {
+        const tSpec = allTablesToRun[tIdx];
+        const sortedGames = tableGamesMap[tIdx].sort((a, b) => a.seed - b.seed);
+
+        for (const gRes of sortedGames) {
+          variantAllSimulatedGames.push(gRes);
+          addEdgeCases(variantEdgeCases, gRes.edgeCases);
+          if (tSpec.isUserSelected) {
+            gamesByCat.allPrimaryGames.push(gRes);
+            if (gRes.textualJournal) {
+              variantSampleTraces.push({
+                seed: gRes.seed,
+                tableConfigName: tSpec.table.name,
+                rawScore: gRes.rawScore,
+                normalizedScore: gRes.normalizedScore,
+                victoryBracket: gRes.victoryBracket,
+                tag:
+                  gRes.normalizedScore >= 0.48 && gRes.normalizedScore <= 0.78
+                    ? 'HIGH_TENSION'
+                    : 'TYPICAL',
+                textualJournal: gRes.textualJournal,
+              });
+            }
+          }
+          if (tSpec.calKey) {
+            gamesByCat[tSpec.calKey].push(gRes);
+          }
+        }
+
+        if (tSpec.isUserSelected) {
+          variantTableSummaries.push(
+            summarizeTableGames(tSpec.table.id, tSpec.table.name, sortedGames)
+          );
+        }
+      }
+
+      const criteria = evaluateFiveCriteria(vSpec.params, gamesByCat);
+      const diagnosticAxes = evaluateFourDiagnosticAxes(vSpec.params, gamesByCat);
+
+      let violationsCount = 0;
+      let totalStagnantTurns = 0;
+      let tacticMonopolyGamesCount = 0;
+      const AllTactics: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
+
+      for (const g of variantAllSimulatedGames) {
+        violationsCount += g.violations.length;
+        totalStagnantTurns += g.stagnantTurns;
+        if (AllTactics.some((t) => g.tacticSlot1Turns[t] >= vSpec.params.x * 0.85)) {
+          tacticMonopolyGamesCount++;
+        }
+      }
+
+      const totalTurns = Math.max(
+        1,
+        variantAllSimulatedGames.length * vSpec.params.x
+      );
+
+      record.variantResults.push({
+        variantId: vSpec.variantId,
+        variantLabel: vSpec.variantLabel,
+        ablationCategory: vSpec.ablationCategory,
+        modifiedSwitchesFromA: vSpec.modifiedSwitchesFromA,
+        switchesChangedCountFromV1: countSwitchesChangedFromV1(vSpec.params),
+        params: vSpec.params,
+        tableSummaries: variantTableSummaries,
+        criteria,
+        diagnosticAxes,
+        edgeCaseTotals: variantEdgeCases,
+        stagnantTurnsRate: totalStagnantTurns / totalTurns,
+        slot1MonopolyGamesRate:
+          variantAllSimulatedGames.length > 0
+            ? tacticMonopolyGamesCount / variantAllSimulatedGames.length
+            : 0,
+        invariantViolationsCount: violationsCount,
+        sampleTraces: variantSampleTraces.slice(0, 6),
+      });
+
+      record.progress.completedVariants = vIdx + 1;
+      record.updatedAt = new Date().toISOString();
+
+      if (Date.now() - ctrl.lastSavedAt >= PERIODIC_SAVE_INTERVAL_MS) {
+        ctrl.lastSavedAt = Date.now();
+        void this.saveToDiskAsync(record);
+      }
+    }
+
+    if (!ctrl.stopped) {
       const elapsedSec = Math.max(0.05, (Date.now() - startTimeMs) / 1000);
       record.progress.elapsedSeconds = elapsedSec;
       record.progress.gamesPerSecond = record.progress.completedGames / elapsedSec;
-      record.updatedAt = new Date().toISOString();
+      record.status = 'COMPLETED';
+      record.completedAt = new Date().toISOString();
+      record.updatedAt = record.completedAt;
+      record.progress.currentPhaseLabel = `Campagne terminée sur ${WORKER_POOL_SIZE} worker(s) (${record.variantResults.length} variante(s) évaluée(s))`;
+      await this.saveToDiskAsync(record);
+    }
 
-      if (currentVariantIdx < variants.length) {
-        const curV = variants[currentVariantIdx];
-        const curT = allTablesToRun[currentTableIdx];
-        record.progress.currentPhaseLabel = `Variante ${currentVariantIdx + 1}/${variants.length} (${curV.variantLabel}) — ${curT.table.name}`;
-
-        if (Date.now() - ctrl.lastSavedAt > 3000) {
-          this.saveToDisk(record);
-          ctrl.lastSavedAt = Date.now();
-        }
-        setImmediate(stepBatch);
-      } else {
-        record.status = 'COMPLETED';
-        record.completedAt = new Date().toISOString();
-        record.updatedAt = record.completedAt;
-        record.progress.currentPhaseLabel = `Campagne terminée (${record.variantResults.length} variante(s) évaluée(s))`;
-        this.saveToDisk(record);
-        this.activeControl.delete(record.id);
-      }
-    };
-
-    setImmediate(stepBatch);
+    this.activeControl.delete(record.id);
   }
 
-  private runStressTestLoop(record: CampaignRecord): void {
+  // ============================================================================
+  // EXÉCUTION MULTI-CŒURS : STRESS-TEST LONGUE DURÉE SUR VM ORACLE
+  // ============================================================================
+  private async runStressTestLoop(record: CampaignRecord): Promise<void> {
     const ctrl = { paused: false, stopped: false, lastSavedAt: Date.now() };
     this.activeControl.set(record.id, ctrl);
 
@@ -793,224 +1025,179 @@ export class CampaignManager {
       }
     }
 
-    const stepStressBatch = () => {
-      if (ctrl.stopped) {
-        this.activeControl.delete(record.id);
-        return;
-      }
+    const maxGames = record.config.maxTotalGames || 1000000;
+    const maxDurationSec = record.config.targetDurationSeconds || null;
+    let nextGameIdx = telemetry.totalGamesSimulated;
+    const gamesPerWorkerBatch = 35;
+
+    while (!ctrl.stopped) {
       if (ctrl.paused) {
-        setTimeout(stepStressBatch, 250);
-        return;
+        await new Promise((r) => setTimeout(r, 250));
+        continue;
       }
 
-      const sliceStart = Date.now();
-      const maxGames = record.config.maxTotalGames || 1000000;
-      const maxDurationSec = record.config.targetDurationSeconds || null;
+      const currentElapsedSec = (Date.now() - startTimeMs) / 1000;
+      if (telemetry.totalGamesSimulated >= maxGames) break;
+      if (maxDurationSec !== null && currentElapsedSec >= maxDurationSec) break;
 
-      while (Date.now() - sliceStart < 25) {
-        const currentElapsedSec = (Date.now() - startTimeMs) / 1000;
-        if (telemetry.totalGamesSimulated >= maxGames) {
-          break;
+      // Prépare une vague parallèle sur tous les workers disponibles
+      const wavePromises: Promise<StressBatchWorkerResponse>[] = [];
+      for (let w = 0; w < WORKER_POOL_SIZE; w++) {
+        const remaining = maxGames - nextGameIdx;
+        if (remaining <= 0) break;
+        const batchCount = Math.min(gamesPerWorkerBatch, remaining);
+        const jobs: StressBatchWorkerRequest['jobs'] = [];
+
+        for (let i = 0; i < batchCount; i++) {
+          const gameIdx = nextGameIdx++;
+          const seed = (record.config.baseSeed || 900000) + gameIdx + 1;
+          let params: GameParameters;
+
+          if (record.config.randomizeParametersInStress) {
+            params = {
+              n: paramRng.nextInt(3, 6),
+              q: paramRng.nextInt(4, 8),
+              a: paramRng.nextInt(1, 3),
+              x: paramRng.nextInt(6, 10),
+              stockAbatteuses:
+                paramRng.nextFloat() < 0.7 ? null : paramRng.nextInt(4, 12),
+              modeTirageDes: (['MIN_2D6', '1D6'] as const)[paramRng.nextInt(0, 1)],
+              modeResolutionParcelle:
+                paramRng.nextFloat() < 0.8 ? 'TRANSACTION_FIGEE' : 'SEQUENTIEL',
+              ordreCasse:
+                paramRng.nextFloat() < 0.8 ? 'AVANT_PARCELLE_1' : 'APRES_PARCELLE_Q',
+              immobiliteReparation: paramRng.nextFloat() < 0.85,
+              ordreMajTactiques:
+                paramRng.nextFloat() < 0.8 ? 'ORDRE_PISTE_TAC' : 'FIXE',
+              rancuneTerrassementDegrade: paramRng.nextFloat() < 0.25,
+              granulariteRancune: (
+                ['PAR_CASE', 'PAR_EVENEMENT', 'CARTE_ET_DESTRUCTION'] as const
+              )[paramRng.nextInt(0, 2)],
+              nbRegeneration: paramRng.nextInt(0, 2),
+              rMaxCycles: 5,
+              ruleNoTargetH1:
+                paramRng.nextFloat() < 0.5
+                  ? 'V1_NO_EFFECT'
+                  : 'V2_FALLBACK_DEPLOY_AND_RETREAT',
+              ruleParryMode:
+                paramRng.nextFloat() < 0.5
+                  ? 'V1_UNLIMITED_PER_CELL'
+                  : 'V2_UNITARY_PER_CARD',
+              rulePreventiveDestruction:
+                paramRng.nextFloat() < 0.5 ? 'V1_ALLOWED' : 'V2_CARD_REQUIRED',
+              ruleBulldozerTargeting:
+                paramRng.nextFloat() < 0.5
+                  ? 'V1_SCRAPYARD_ZERO_AND_REVERSE_TIE'
+                  : 'V2_FOREST_PRIORITY_AND_UNIFIED_TIE',
+              ruleScrapyardExit:
+                paramRng.nextFloat() < 0.5 ? 'V1_PASSIVE_D1' : 'V2_OFFENSIVE_D2',
+              ruleInitialSetup:
+                paramRng.nextFloat() < 0.5
+                  ? 'V1_SPARSE_RANK3_EMPTY'
+                  : 'V2_SMOOTH_DENSE',
+            };
+          } else {
+            params = variants[gameIdx % variants.length].params;
+          }
+
+          const botProfile = botLevels[gameIdx % botLevels.length];
+          jobs.push({ seed, params, botProfile });
         }
-        if (maxDurationSec !== null && currentElapsedSec >= maxDurationSec) {
-          break;
-        }
 
-        const gameIdx = telemetry.totalGamesSimulated;
-        const seed = (record.config.baseSeed || 900000) + gameIdx + 1;
+        wavePromises.push(
+          sharedWorkerPool.runStressBatch({
+            jobs,
+            needDetailedCapture: telemetry.capturedExtremeLogs.length < 12,
+          })
+        );
+      }
 
-        let params: GameParameters;
-        if (record.config.randomizeParametersInStress) {
-          params = {
-            n: paramRng.nextInt(3, 6),
-            q: paramRng.nextInt(4, 8),
-            a: paramRng.nextInt(1, 3),
-            x: paramRng.nextInt(6, 10),
-            stockAbatteuses:
-              paramRng.nextFloat() < 0.7 ? null : paramRng.nextInt(4, 12),
-            // MAX_2D6 est strictement exclu des stress-tests aléatoires
-            modeTirageDes: (['MIN_2D6', '1D6'] as const)[paramRng.nextInt(0, 1)],
-            modeResolutionParcelle:
-              paramRng.nextFloat() < 0.8 ? 'TRANSACTION_FIGEE' : 'SEQUENTIEL',
-            ordreCasse:
-              paramRng.nextFloat() < 0.8 ? 'AVANT_PARCELLE_1' : 'APRES_PARCELLE_Q',
-            immobiliteReparation: paramRng.nextFloat() < 0.85,
-            ordreMajTactiques:
-              paramRng.nextFloat() < 0.8 ? 'ORDRE_PISTE_TAC' : 'FIXE',
-            rancuneTerrassementDegrade: paramRng.nextFloat() < 0.25,
-            granulariteRancune: (
-              ['PAR_CASE', 'PAR_EVENEMENT', 'CARTE_ET_DESTRUCTION'] as const
-            )[paramRng.nextInt(0, 2)],
-            nbRegeneration: paramRng.nextInt(0, 2),
-            rMaxCycles: 5,
-            ruleNoTargetH1:
-              paramRng.nextFloat() < 0.5
-                ? 'V1_NO_EFFECT'
-                : 'V2_FALLBACK_DEPLOY_AND_RETREAT',
-            ruleParryMode:
-              paramRng.nextFloat() < 0.5
-                ? 'V1_UNLIMITED_PER_CELL'
-                : 'V2_UNITARY_PER_CARD',
-            rulePreventiveDestruction:
-              paramRng.nextFloat() < 0.5 ? 'V1_ALLOWED' : 'V2_CARD_REQUIRED',
-            ruleBulldozerTargeting:
-              paramRng.nextFloat() < 0.5
-                ? 'V1_SCRAPYARD_ZERO_AND_REVERSE_TIE'
-                : 'V2_FOREST_PRIORITY_AND_UNIFIED_TIE',
-            ruleScrapyardExit:
-              paramRng.nextFloat() < 0.5 ? 'V1_PASSIVE_D1' : 'V2_OFFENSIVE_D2',
-            ruleInitialSetup:
-              paramRng.nextFloat() < 0.5
-                ? 'V1_SPARSE_RANK3_EMPTY'
-                : 'V2_SMOOTH_DENSE',
-          };
-        } else {
-          params = variants[gameIdx % variants.length].params;
-        }
+      if (wavePromises.length === 0) break;
 
-        const chosenBot = botLevels[gameIdx % botLevels.length];
-        const res = runSingleGame(seed, params, `stress_${chosenBot}`, [chosenBot], {
-          recordTraces: false,
-        });
+      const waveResponses = await Promise.all(wavePromises);
+      if (ctrl.stopped) break;
 
-        telemetry.totalGamesSimulated += 1;
-        telemetry.totalTurnsSimulated += params.x;
-        telemetry.invariantsVerifiedCount += (params.x * 2 + 2) * 4;
-        addEdgeCases(telemetry.edgeCaseOccurrences, res.edgeCases);
+      const AllTactics: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
 
-        const bStat = telemetry.scoreDistributionByBotLevel[chosenBot];
-        const bSum = botSums[chosenBot];
-        bStat.games += 1;
-        bSum.sumNorm += res.normalizedScore;
-        if (res.victoryBracket === 'DEFEAT') bSum.defeats += 1;
-        if (res.victoryBracket === 'MIRACLE') bSum.miracles += 1;
-        bStat.meanNormalized = bSum.sumNorm / bStat.games;
-        bStat.minNormalized = Math.min(bStat.minNormalized, res.normalizedScore);
-        bStat.maxNormalized = Math.max(bStat.maxNormalized, res.normalizedScore);
-        bStat.defeatRate = bSum.defeats / bStat.games;
-        bStat.miracleRate = bSum.miracles / bStat.games;
+      for (const batchResp of waveResponses) {
+        for (const item of batchResp.outcomes) {
+          const { seed, params, botProfile, res, captureCategory, captureSummary, detailedJournal } = item;
 
-        let captureCategory:
-          | 'INVARIANT_VIOLATION'
-          | 'EARLY_WIPEOUT'
-          | 'STAGNATION'
-          | 'TACTIC_MONOPOLY'
-          | 'OMNISCIENT_DEFEAT'
-          | 'RECORD_EDGE_CASES'
-          | null = null;
-        let captureSummary = '';
+          telemetry.totalGamesSimulated += 1;
+          telemetry.totalTurnsSimulated += params.x;
+          telemetry.invariantsVerifiedCount += (params.x * 2 + 2) * 4;
+          addEdgeCases(telemetry.edgeCaseOccurrences, res.edgeCases);
 
-        if (res.violations.length > 0) {
-          telemetry.violationsCount += res.violations.length;
-          for (const v of res.violations) {
-            if (telemetry.violationsLog.length < 50) {
-              telemetry.violationsLog.push(v);
+          const bStat = telemetry.scoreDistributionByBotLevel[botProfile];
+          const bSum = botSums[botProfile];
+          bStat.games += 1;
+          bSum.sumNorm += res.normalizedScore;
+          if (res.victoryBracket === 'DEFEAT') bSum.defeats += 1;
+          if (res.victoryBracket === 'MIRACLE') bSum.miracles += 1;
+          bStat.meanNormalized = bSum.sumNorm / bStat.games;
+          bStat.minNormalized = Math.min(bStat.minNormalized, res.normalizedScore);
+          bStat.maxNormalized = Math.max(bStat.maxNormalized, res.normalizedScore);
+          bStat.defeatRate = bSum.defeats / bStat.games;
+          bStat.miracleRate = bSum.miracles / bStat.games;
+
+          if (res.violations.length > 0) {
+            telemetry.violationsCount += res.violations.length;
+            for (const v of res.violations) {
+              if (telemetry.violationsLog.length < 50) {
+                telemetry.violationsLog.push(v);
+              }
             }
           }
-          captureCategory = 'INVARIANT_VIOLATION';
-          captureSummary = res.violations[0].message;
-        }
+          if (res.stagnantTurns > 0) telemetry.stagnantGamesCount += 1;
+          if (res.earlyWipeoutTurn !== null) telemetry.earlyWipeoutGamesCount += 1;
+          if (AllTactics.some((t) => res.tacticSlot1Turns[t] === params.x)) {
+            telemetry.tacticMonopolyGamesCount += 1;
+          }
+          if (botProfile === 'OMNISCIENT' && res.victoryBracket === 'DEFEAT') {
+            telemetry.omniscientUnwinnableSeedsCount += 1;
+          }
 
-        if (res.stagnantTurns > 0) {
-          telemetry.stagnantGamesCount += 1;
-          if (!captureCategory) {
-            captureCategory = 'STAGNATION';
-            captureSummary = `${res.stagnantTurns} tour(s) stagnant(s) sans évolution d'état ni mouvement.`;
+          if (captureCategory && telemetry.capturedExtremeLogs.length < 12) {
+            const alreadyHasCategoryCount = telemetry.capturedExtremeLogs.filter(
+              (l) => l.category === captureCategory
+            ).length;
+            if (alreadyHasCategoryCount < 3 || captureCategory === 'INVARIANT_VIOLATION') {
+              telemetry.capturedExtremeLogs.push({
+                seed,
+                category: captureCategory,
+                summary: captureSummary,
+                params,
+                textualJournal: detailedJournal || '',
+              });
+            }
           }
         }
-
-        if (res.earlyWipeoutTurn !== null) {
-          telemetry.earlyWipeoutGamesCount += 1;
-          if (!captureCategory) {
-            captureCategory = 'EARLY_WIPEOUT';
-            captureSummary = `Destruction totale de la forêt dès le tour ${res.earlyWipeoutTurn}/${params.x} (Bot: ${chosenBot}).`;
-          }
-        }
-
-        const AllTactics: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
-        const monopolyTac = AllTactics.find((t) => res.tacticSlot1Turns[t] === params.x);
-        if (monopolyTac) {
-          telemetry.tacticMonopolyGamesCount += 1;
-          if (!captureCategory) {
-            captureCategory = 'TACTIC_MONOPOLY';
-            captureSummary = `La tactique ${monopolyTac} est restée verrouillée en Case 1 pendant 100% des ${params.x} tours.`;
-          }
-        }
-
-        if (chosenBot === 'OMNISCIENT' && res.victoryBracket === 'DEFEAT') {
-          telemetry.omniscientUnwinnableSeedsCount += 1;
-          if (!captureCategory) {
-            captureCategory = 'OMNISCIENT_DEFEAT';
-            captureSummary = `Graine très punitive : même le Bot Omniscient subit une Défaite (${(res.normalizedScore * 100).toFixed(1)}% d'arbres sauvés).`;
-          }
-        }
-
-        const totalEdgeInGame =
-          res.edgeCases.H1_noTargetEligible +
-          res.edgeCases.H2_multipleHarvesterCardsSingleTree +
-          res.edgeCases.H3_multipleBulldozerCardsSameCell +
-          res.edgeCases.H4_repairedBulldozerImmunityInCell1;
-        if (!captureCategory && totalEdgeInGame >= 5) {
-          captureCategory = 'RECORD_EDGE_CASES';
-          captureSummary = `Forte concentration de cas limites en une seule partie (${totalEdgeInGame} occurrences H1-H4).`;
-        }
-
-        if (captureCategory && telemetry.capturedExtremeLogs.length < 12) {
-          const alreadyHasCategoryCount = telemetry.capturedExtremeLogs.filter(
-            (l) => l.category === captureCategory
-          ).length;
-          if (alreadyHasCategoryCount < 3 || captureCategory === 'INVARIANT_VIOLATION') {
-            const detailed = runSingleGame(
-              seed,
-              params,
-              `stress_${chosenBot}`,
-              [chosenBot],
-              { recordTraces: true }
-            );
-            telemetry.capturedExtremeLogs.push({
-              seed,
-              category: captureCategory,
-              summary: captureSummary,
-              params,
-              textualJournal: detailed.textualJournal || '',
-            });
-          }
-        }
-
-        record.progress.completedGames = telemetry.totalGamesSimulated;
       }
 
+      record.progress.completedGames = telemetry.totalGamesSimulated;
       const elapsedSec = Math.max(0.05, (Date.now() - startTimeMs) / 1000);
       telemetry.elapsedSeconds = elapsedSec;
       telemetry.gamesPerSecond = telemetry.totalGamesSimulated / elapsedSec;
       record.progress.elapsedSeconds = elapsedSec;
       record.progress.gamesPerSecond = telemetry.gamesPerSecond;
       record.updatedAt = new Date().toISOString();
+      record.progress.currentPhaseLabel = `[${WORKER_POOL_SIZE} workers] Exploration intensive (${telemetry.totalGamesSimulated.toLocaleString('fr-FR')} parties, ${telemetry.invariantsVerifiedCount.toLocaleString('fr-FR')} invariants vérifiés)...`;
 
-      const targetReached =
-        telemetry.totalGamesSimulated >= (record.config.maxTotalGames || 1000000) ||
-        (record.config.targetDurationSeconds !== null &&
-          record.config.targetDurationSeconds !== undefined &&
-          elapsedSec >= record.config.targetDurationSeconds);
-
-      if (!targetReached) {
-        record.progress.currentPhaseLabel = `Exploration intensive en cours (${telemetry.totalGamesSimulated.toLocaleString('fr-FR')} parties, ${telemetry.invariantsVerifiedCount.toLocaleString('fr-FR')} invariants vérifiés)...`;
-        if (Date.now() - ctrl.lastSavedAt > 4000) {
-          this.saveToDisk(record);
-          ctrl.lastSavedAt = Date.now();
-        }
-        setImmediate(stepStressBatch);
-      } else {
-        record.status = 'COMPLETED';
-        record.completedAt = new Date().toISOString();
-        record.updatedAt = record.completedAt;
-        record.progress.currentPhaseLabel = `Stress-Test terminé : ${telemetry.totalGamesSimulated.toLocaleString('fr-FR')} parties vérifiées, ${telemetry.violationsCount} violation(s) d'invariants.`;
-        this.saveToDisk(record);
-        this.activeControl.delete(record.id);
+      if (Date.now() - ctrl.lastSavedAt >= PERIODIC_SAVE_INTERVAL_MS) {
+        ctrl.lastSavedAt = Date.now();
+        void this.saveToDiskAsync(record);
       }
-    };
+    }
 
-    setImmediate(stepStressBatch);
+    if (!ctrl.stopped) {
+      record.status = 'COMPLETED';
+      record.completedAt = new Date().toISOString();
+      record.updatedAt = record.completedAt;
+      record.progress.currentPhaseLabel = `Stress-Test terminé (${WORKER_POOL_SIZE} workers) : ${telemetry.totalGamesSimulated.toLocaleString('fr-FR')} parties vérifiées, ${telemetry.violationsCount} violation(s) d'invariants.`;
+      await this.saveToDiskAsync(record);
+    }
+
+    this.activeControl.delete(record.id);
   }
 
   private createInitialReferenceCampaigns(): void {
@@ -1053,11 +1240,11 @@ export class CampaignManager {
         ruleInitialSetupValues: ['V1_SPARSE_RANK3_EMPTY'],
       },
       selectedTableConfigs: [
-        DEFAULT_TABLE_CONFIGS[0], // Coopératif N2
-        DEFAULT_TABLE_CONFIGS[1], // Stratège N3
-        DEFAULT_TABLE_CONFIGS[2], // Égoïste N1
-        DEFAULT_TABLE_CONFIGS[3], // Aveugle Probabiliste
-        DEFAULT_TABLE_CONFIGS[5], // Omniscient
+        DEFAULT_TABLE_CONFIGS[0],
+        DEFAULT_TABLE_CONFIGS[1],
+        DEFAULT_TABLE_CONFIGS[2],
+        DEFAULT_TABLE_CONFIGS[3],
+        DEFAULT_TABLE_CONFIGS[5],
       ],
       includeCalibrationTables: true,
       baseSeed: 42000,

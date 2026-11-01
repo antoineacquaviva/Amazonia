@@ -17,13 +17,52 @@ import { browserCampaignManager } from './browserFallback';
 
 let useBrowserFallback = false;
 
+export interface ServerHealthInfo {
+  status: string;
+  version: string;
+  environment: string;
+  port: number;
+  cpuCount: number;
+  workersCount: number;
+  activeCampaigns: number;
+  editionsCount: number;
+  pinnedSeedsCount: number;
+}
+
 export function isUsingBrowserFallback(): boolean {
   return useBrowserFallback;
+}
+
+export function setUseBrowserFallback(value: boolean): void {
+  useBrowserFallback = value;
 }
 
 export function buildApiUrl(endpoint: string): string {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
   return `./${cleanEndpoint}`;
+}
+
+export async function fetchServerHealth(
+  forceRetryBackend = false
+): Promise<ServerHealthInfo | null> {
+  if (forceRetryBackend) {
+    useBrowserFallback = false;
+  }
+  if (useBrowserFallback) return null;
+  try {
+    const res = await fetch(buildApiUrl('api/health'));
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok || !contentType.includes('application/json')) {
+      useBrowserFallback = true;
+      return null;
+    }
+    const data = (await res.json()) as ServerHealthInfo;
+    useBrowserFallback = false;
+    return data;
+  } catch {
+    useBrowserFallback = true;
+    return null;
+  }
 }
 
 async function tryBackendJson<T>(
