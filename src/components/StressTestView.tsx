@@ -1,436 +1,338 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   BotProfileId,
   CampaignConfig,
   CampaignRecord,
-  ThemeVocabularyMode,
 } from '../sim/types';
 import {
   BOT_PROFILE_META,
-  DEFAULT_TABLE_CONFIGS,
-  V2_SWITCHES,
+  DEFAULT_SWEEP_INPUT,
 } from '../sim/i18n';
-import { downloadCampaignJson, downloadCampaignMarkdown } from '../api';
 import {
-  AlertOctagon,
-  CheckCircle2,
-  Cpu,
-  Download,
-  Pause,
-  Play,
-  Square,
-} from 'lucide-react';
+  downloadCampaignJson,
+  downloadCampaignMarkdown,
+} from '../api';
 
 interface StressTestViewProps {
   campaigns: CampaignRecord[];
-  selectedCampaign: CampaignRecord | null;
+  activeCampaign: CampaignRecord | null;
   onSelectCampaign: (id: string) => void;
-  onLaunchCampaign: (config: Partial<CampaignConfig>) => Promise<void>;
+  onStartCampaign: (config: Partial<CampaignConfig>) => Promise<void>;
   onControlCampaign: (id: string, action: 'pause' | 'resume' | 'stop') => void;
-  onInspectJournal: () => void;
-  vocabulary: ThemeVocabularyMode;
+  onDeleteCampaign: (id: string) => void;
+  isSubmitting: boolean;
 }
 
 export const StressTestView: React.FC<StressTestViewProps> = ({
   campaigns,
-  selectedCampaign,
+  activeCampaign,
   onSelectCampaign,
-  onLaunchCampaign,
+  onStartCampaign,
   onControlCampaign,
-  onInspectJournal,
+  onDeleteCampaign,
+  isSubmitting,
 }) => {
-  const [name, setName] = useState(
-    'Campagne Stress-Test VM Oracle — Exploration 64 Hybrides V1↔V2'
+  const [maxGames, setMaxGames] = useState<number>(50000);
+  const [randomizeParams, setRandomizeParams] = useState<boolean>(true);
+  const [selectedLogIdx, setSelectedLogIdx] = useState<number>(0);
+
+  const stressCampaigns = useMemo(
+    () => campaigns.filter((c) => c.config.type === 'ORACLE_STRESS_TEST'),
+    [campaigns]
   );
-  const [maxTotalGames, setMaxTotalGames] = useState<number>(25000);
-  const [targetDurationMinutes, setTargetDurationMinutes] =
-    useState<number>(30);
-  const [randomizeParametersInStress, setRandomizeParametersInStress] =
-    useState<boolean>(true);
-  const [launching, setLaunching] = useState(false);
 
-  const stressCampaigns = campaigns.filter(
-    (c) => c.config.type === 'ORACLE_STRESS_TEST'
-  );
-  const activeStress =
-    selectedCampaign?.config.type === 'ORACLE_STRESS_TEST'
-      ? selectedCampaign
-      : stressCampaigns[0] || selectedCampaign;
-
-  const telemetry = activeStress?.stressTelemetry;
-
-  const handleLaunchStress = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLaunching(true);
-    try {
-      await onLaunchCampaign({
-        name,
-        type: 'ORACLE_STRESS_TEST',
-        maxTotalGames,
-        targetDurationSeconds: targetDurationMinutes * 60,
-        randomizeParametersInStress,
-        baseSeed: Math.floor(Math.random() * 900000) + 100000,
-        selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
-        sweep: {
-          nValues: [4],
-          qValues: [6],
-          aValues: [2],
-          xValues: [8],
-          stockAbatteusesValues: [null],
-          modeTirageDesValues: ['MIN_2D6'],
-          modeResolutionParcelleValues: ['TRANSACTION_FIGEE'],
-          ordreCasseValues: ['AVANT_PARCELLE_1'],
-          immobiliteReparationValues: [true],
-          ordreMajTactiquesValues: ['ORDRE_PISTE_TAC'],
-          rancuneTerrassementDegradeValues: [false],
-          granulariteRancuneValues: ['PAR_CASE'],
-          nbRegenerationValues: [1],
-          ruleNoTargetH1Values: [V2_SWITCHES.ruleNoTargetH1],
-          ruleParryModeValues: [V2_SWITCHES.ruleParryMode],
-          rulePreventiveDestructionValues: [
-            V2_SWITCHES.rulePreventiveDestruction,
-          ],
-          ruleBulldozerTargetingValues: [V2_SWITCHES.ruleBulldozerTargeting],
-          ruleScrapyardExitValues: [V2_SWITCHES.ruleScrapyardExit],
-          ruleInitialSetupValues: [V2_SWITCHES.ruleInitialSetup],
-        },
-      });
-    } finally {
-      setLaunching(false);
+  const currentStress = useMemo(() => {
+    if (activeCampaign && activeCampaign.config.type === 'ORACLE_STRESS_TEST') {
+      return activeCampaign;
     }
+    return stressCampaigns[0] || null;
+  }, [activeCampaign, stressCampaigns]);
+
+  const handleLaunchStress = async () => {
+    await onStartCampaign({
+      name: `Stress-Test Multi-Cœurs (${maxGames.toLocaleString('fr-FR')} parties)`,
+      type: 'ORACLE_STRESS_TEST',
+      maxTotalGames: maxGames,
+      randomizeParametersInStress: randomizeParams,
+      sweep: DEFAULT_SWEEP_INPUT,
+      baseSeed: Math.floor(Math.random() * 900000) + 100000,
+    });
   };
+
+  const telemetry = currentStress?.stressTelemetry;
+  const botKeys: BotProfileId[] = [
+    'RANDOM',
+    'COMBAT_PURE',
+    'HYBRID_STEALTH_COMBAT',
+    'OMNISCIENT',
+  ];
 
   return (
     <div className="space-y-6">
-      {/* Lanceur de Stress-Test Asynchrone VM Oracle */}
-      <form
-        onSubmit={handleLaunchStress}
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      {/* Lancement d'un Stress-Test */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
-            <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-              Superviseur de Stress-Test Longue Durée (VM Oracle) & Traqueur d’Invariants I1–I4
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Explore en arrière-plan des dizaines de milliers de parties sur les 64 combinaisons d’interrupteurs V1↔V2 (en excluant MAX_2D6 du tirage aléatoire par défaut).
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Stress-Test Multi-Cœurs & Vérificateur d'Invariants (I1..I4)
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Exécute des dizaines de milliers de parties en parallèle sur les workers de la VM Oracle pour détecter les cas extrêmes (doubles explosions, défaites omniscientes, synergies furtives).
             </p>
           </div>
-          <Cpu className="w-6 h-6 text-emerald-600" />
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
-          <div className="md:col-span-2">
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Nom de la Session Stress-Test
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                Volume :
+              </label>
+              <select
+                value={maxGames}
+                onChange={(e) => setMaxGames(Number(e.target.value))}
+                className="px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              >
+                <option value={5000}>5 000 parties</option>
+                <option value={25000}>25 000 parties</option>
+                <option value={50000}>50 000 parties</option>
+                <option value={100000}>100 000 parties</option>
+                <option value={250000}>250 000 parties</option>
+              </select>
+            </div>
+
+            <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={randomizeParams}
+                onChange={(e) => setRandomizeParams(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Fuzzing aléatoire ($N, X, a$, D1/D2, états initiaux)
             </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-              required
-            />
-          </div>
-          <div>
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Cible max de parties
-            </label>
-            <input
-              type="number"
-              min={500}
-              max={1000000}
-              step={500}
-              value={maxTotalGames}
-              onChange={(e) => setMaxTotalGames(Number(e.target.value) || 10000)}
-              className="w-full px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-            />
-          </div>
-          <div>
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Durée max (minutes)
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={720}
-              value={targetDurationMinutes}
-              onChange={(e) =>
-                setTargetDurationMinutes(Number(e.target.value) || 30)
-              }
-              className="w-full px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-            />
+
+            <button
+              onClick={handleLaunchStress}
+              disabled={isSubmitting}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-semibold rounded cursor-pointer"
+            >
+              {isSubmitting ? 'Lancement...' : 'Lancer Stress-Test VM'}
+            </button>
           </div>
         </div>
+      </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={randomizeParametersInStress}
-              onChange={(e) =>
-                setRandomizeParametersInStress(e.target.checked)
-              }
-            />
-            <span className="text-slate-700 dark:text-slate-300">
-              Varier aléatoirement (n, q, a, x) et les 6 interrupteurs V1↔V2 à chaque partie (MAX_2D6 exclu conformément à la spécification v2.0)
-            </span>
-          </label>
-
-          <button
-            type="submit"
-            disabled={launching}
-            className="inline-flex items-center gap-1.5 px-4 py-2 font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-md"
-          >
-            <Play className="w-3.5 h-3.5" />
-            {launching ? 'Lancement...' : 'Démarrer le Stress-Test en Arrière-Plan'}
-          </button>
+      {!currentStress || !telemetry ? (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-10 text-center">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Aucun Stress-Test enregistré. Cliquez sur « Lancer Stress-Test VM » ci-dessus pour démarrer la vérification.
+          </p>
         </div>
-      </form>
-
-      {/* Télémétrie de la campagne sélectionnée */}
-      {activeStress && telemetry && (
-        <div className="space-y-6">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-semibold text-slate-500">
-                  Session inspectée :
-                </span>
-                <select
-                  value={activeStress.id}
-                  onChange={(e) => onSelectCampaign(e.target.value)}
-                  className="px-3 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-                >
-                  {campaigns.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.config.name} ({c.status} · {c.progress.completedGames} parties)
-                    </option>
-                  ))}
-                </select>
+      ) : (
+        <>
+          {/* Barre d'état du Stress-Test actif */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={currentStress.id}
+                    onChange={(e) => onSelectCampaign(e.target.value)}
+                    className="bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-3 py-1 text-xs font-semibold"
+                  >
+                    {stressCampaigns.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.config.name} ({c.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 tabular-nums">
+                  {currentStress.progress.currentPhaseLabel}
+                </p>
               </div>
 
-              <div className="flex items-center gap-2 text-xs">
-                {activeStress.status === 'RUNNING' && (
+              <div className="flex flex-wrap items-center gap-2">
+                {currentStress.status === 'RUNNING' && (
                   <button
-                    onClick={() => onControlCampaign(activeStress.id, 'pause')}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 bg-amber-100 text-amber-800 rounded"
+                    onClick={() => onControlCampaign(currentStress.id, 'pause')}
+                    className="px-3 py-1 text-xs font-medium bg-amber-600 text-white rounded cursor-pointer"
                   >
-                    <Pause className="w-3.5 h-3.5" /> Pause
+                    Pause
                   </button>
                 )}
-                {activeStress.status === 'PAUSED' && (
+                {currentStress.status === 'PAUSED' && (
                   <button
-                    onClick={() => onControlCampaign(activeStress.id, 'resume')}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-100 text-emerald-800 rounded"
+                    onClick={() => onControlCampaign(currentStress.id, 'resume')}
+                    className="px-3 py-1 text-xs font-medium bg-emerald-700 text-white rounded cursor-pointer"
                   >
-                    <Play className="w-3.5 h-3.5" /> Reprendre
+                    Reprendre
                   </button>
                 )}
-                {(activeStress.status === 'RUNNING' ||
-                  activeStress.status === 'PAUSED') && (
+                {(currentStress.status === 'RUNNING' ||
+                  currentStress.status === 'PAUSED') && (
                   <button
-                    onClick={() => onControlCampaign(activeStress.id, 'stop')}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-800 rounded"
+                    onClick={() => onControlCampaign(currentStress.id, 'stop')}
+                    className="px-3 py-1 text-xs font-medium bg-rose-700 text-white rounded cursor-pointer"
                   >
-                    <Square className="w-3.5 h-3.5" /> Arrêter
+                    Arrêter
                   </button>
                 )}
                 <button
-                  type="button"
-                  onClick={() => downloadCampaignMarkdown(activeStress)}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 font-semibold text-white bg-emerald-700 rounded"
+                  onClick={() => downloadCampaignMarkdown(currentStress)}
+                  className="px-3 py-1 text-xs font-medium border border-emerald-700 text-emerald-800 dark:text-emerald-300 rounded cursor-pointer"
                 >
-                  <Download className="w-3.5 h-3.5" /> Export .md
+                  Export Markdown
                 </button>
                 <button
-                  type="button"
-                  onClick={() => downloadCampaignJson(activeStress)}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded"
+                  onClick={() => downloadCampaignJson(currentStress)}
+                  className="px-3 py-1 text-xs font-medium border border-slate-300 dark:border-slate-700 rounded cursor-pointer"
                 >
-                  <Download className="w-3.5 h-3.5" /> .json
+                  Export JSON
+                </button>
+                <button
+                  onClick={() => onDeleteCampaign(currentStress.id)}
+                  className="px-2.5 py-1 text-xs text-rose-600 hover:underline cursor-pointer"
+                >
+                  Supprimer
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 font-mono tabular-nums">
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <div className="text-[11px] font-sans text-slate-500">
-                  Parties Simulées
-                </div>
-                <div className="text-lg font-bold text-slate-900 dark:text-slate-100">
+            {/* Compteurs principaux */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4 tabular-nums">
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500">Parties simulées</div>
+                <div className="text-lg font-bold font-mono text-slate-900 dark:text-slate-100">
                   {telemetry.totalGamesSimulated.toLocaleString('fr-FR')}
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <div className="text-[11px] font-sans text-slate-500">
-                  Cadence Moyenne
-                </div>
-                <div className="text-lg font-bold text-emerald-700 dark:text-emerald-400">
-                  {telemetry.gamesPerSecond.toFixed(1)} p/s
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500">Vélocité multi-cœurs</div>
+                <div className="text-lg font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  {telemetry.gamesPerSecond.toFixed(0)} p/s
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <div className="text-[11px] font-sans text-slate-500">
-                  Invariants Vérifiés
-                </div>
-                <div className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500">Assertions I1..I4 vérifiées</div>
+                <div className="text-lg font-bold font-mono text-slate-900 dark:text-slate-100">
                   {telemetry.invariantsVerifiedCount.toLocaleString('fr-FR')}
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <div className="text-[11px] font-sans text-slate-500">
-                  Violations (I1–I4)
-                </div>
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500">Violations d'Invariants</div>
                 <div
-                  className={`text-lg font-bold ${
+                  className={`text-lg font-bold font-mono ${
                     telemetry.violationsCount === 0
-                      ? 'text-emerald-600'
-                      : 'text-red-600'
+                      ? 'text-emerald-700 dark:text-emerald-400'
+                      : 'text-rose-600'
                   }`}
                 >
                   {telemetry.violationsCount}
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <div className="text-[11px] font-sans text-slate-500">
-                  Stagnations / Monopoles
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500">Explosions observées</div>
+                <div className="text-lg font-bold font-mono text-rose-700 dark:text-rose-400">
+                  {telemetry.totalExplosionsObserved.toLocaleString('fr-FR')}
                 </div>
-                <div className="text-lg font-bold text-amber-600">
-                  {telemetry.stagnantGamesCount} / {telemetry.tacticMonopolyGamesCount}
+              </div>
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500">Pièges & Sabotages posés</div>
+                <div className="text-lg font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  {telemetry.totalTrapsAndSabotagesObserved.toLocaleString('fr-FR')}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Journal détaillé des Violations d'Invariants (si > 0) */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Traqueur Détaillé de Violations des Invariants (I1 Conservation Arbres, I2 Bornes Machines, I3 Permutation Cerveau, I4 Légalité Défenseurs)
-              </h2>
-              {telemetry.violationsCount === 0 ? (
-                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                  <CheckCircle2 className="w-4 h-4" /> Aucune violation détectée
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-600">
-                  <AlertOctagon className="w-4 h-4" /> {telemetry.violationsCount} violation(s) enregistrée(s)
-                </span>
-              )}
-            </div>
-
-            {telemetry.violationsLog.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs font-mono">
-                  <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
-                      <th className="py-2 px-3">Code Invariant</th>
-                      <th className="py-2 px-2">Seed</th>
-                      <th className="py-2 px-2">Tour / Phase</th>
-                      <th className="py-2 px-3">Message & Diagnostic</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                    {telemetry.violationsLog.map((v, i) => (
-                      <tr key={i} className="bg-red-50/40 dark:bg-red-950/20">
-                        <td className="py-2 px-3 font-bold text-red-700 dark:text-red-400">
-                          {v.code}
-                        </td>
-                        <td className="py-2 px-2">#{v.seed}</td>
-                        <td className="py-2 px-2">
-                          T{v.turn} · {v.phase}
-                        </td>
-                        <td className="py-2 px-3 font-sans">{v.message}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Distribution par Niveau de Bot (incluant BLIND_PROB) */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-            <div className="p-4 border-b border-slate-200 dark:border-slate-800">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Performance Comparée des 6 Profils de Bots en Stress-Test
-              </h2>
-            </div>
+          {/* Distribution par niveau de Bot */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">
+              Performance Comparée des 4 Profils de Bots sous Stress-Test
+            </h3>
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
+              <table className="w-full text-left border-collapse text-xs tabular-nums">
                 <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-500">
-                    <th className="py-2 px-4">Profil de Bot</th>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                    <th className="py-2 px-3">Profil de Bot</th>
                     <th className="py-2 px-3 text-right">Parties</th>
                     <th className="py-2 px-3 text-right">Survie Moyenne</th>
-                    <th className="py-2 px-3 text-right">% Défaites (&lt;50%)</th>
-                    <th className="py-2 px-3 text-right">% Miracles (100%)</th>
+                    <th className="py-2 px-3 text-right">Arbres Perdus Moy.</th>
+                    <th className="py-2 px-3 text-right">Explosions / Partie</th>
+                    <th className="py-2 px-3 text-right">Taux Miracle (≥85%)</th>
+                    <th className="py-2 px-3 text-right">Taux Défaite (&lt;45%)</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
-                  {(Object.keys(BOT_PROFILE_META) as BotProfileId[]).map(
-                    (botId) => {
-                      const row = telemetry.scoreDistributionByBotLevel[botId];
-                      if (!row) return null;
-                      return (
-                        <tr key={botId}>
-                          <td className="py-2.5 px-4 font-sans font-semibold text-slate-900 dark:text-slate-100">
-                            {BOT_PROFILE_META[botId].label}
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            {row.games.toLocaleString('fr-FR')}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-bold text-emerald-700 dark:text-emerald-400">
-                            {(row.meanNormalized * 100).toFixed(1)}%
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            {(row.defeatRate * 100).toFixed(1)}%
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            {(row.miracleRate * 100).toFixed(1)}%
-                          </td>
-                        </tr>
-                      );
-                    }
-                  )}
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {botKeys.map((bKey) => {
+                    const st = telemetry.scoreDistributionByBotLevel[bKey];
+                    if (!st) return null;
+                    return (
+                      <tr key={bKey}>
+                        <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-slate-100">
+                          {BOT_PROFILE_META[bKey].name}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          {st.games.toLocaleString('fr-FR')}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                          {(st.meanSurvivalHorizon * 100).toFixed(1)} %
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          {st.meanTreesLost.toFixed(2)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          {st.meanExplosions.toFixed(2)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-emerald-700 dark:text-emerald-400">
+                          {(st.miracleRate * 100).toFixed(1)} %
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-rose-700 dark:text-rose-400">
+                          {(st.defeatRate * 100).toFixed(1)} %
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
 
-          {/* Journaux extrêmes capturés */}
+          {/* Parties extrêmes capturées avec Combat Log */}
           {telemetry.capturedExtremeLogs.length > 0 && (
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                  Parties Extrêmes Capturées ({telemetry.capturedExtremeLogs.length})
-                </h2>
-                <button
-                  onClick={onInspectJournal}
-                  className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
-                >
-                  Ouvrir l’inspecteur de journaux →
-                </button>
-              </div>
-              <div className="space-y-2">
-                {telemetry.capturedExtremeLogs.slice(0, 6).map((log, i) => (
-                  <div
-                    key={i}
-                    className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 text-xs flex items-center justify-between gap-4"
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-2">
+                Parties Extrêmes Capturées ({telemetry.capturedExtremeLogs.length})
+              </h3>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {telemetry.capturedExtremeLogs.map((log, idx) => (
+                  <button
+                    key={`${log.seed}-${idx}`}
+                    onClick={() => setSelectedLogIdx(idx)}
+                    className={`px-3 py-1.5 text-xs font-mono rounded border cursor-pointer ${
+                      selectedLogIdx === idx
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                    }`}
                   >
-                    <div>
-                      <span className="font-mono font-bold text-amber-700 dark:text-amber-400">
-                        [{log.category}] Seed #{log.seed}
-                      </span>{' '}
-                      — <span>{log.summary}</span>
-                    </div>
-                  </div>
+                    #{log.seed} · {log.category}
+                  </button>
                 ))}
               </div>
+
+              {telemetry.capturedExtremeLogs[selectedLogIdx] && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 mb-2">
+                    {telemetry.capturedExtremeLogs[selectedLogIdx].summary}
+                  </div>
+                  <pre className="p-4 rounded bg-slate-950 text-slate-100 font-mono text-xs overflow-x-auto max-h-96 leading-relaxed">
+                    {telemetry.capturedExtremeLogs[selectedLogIdx].textualJournal ||
+                      'Journal détaillé disponible via le simulateur unitaire.'}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

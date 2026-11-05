@@ -1,16 +1,15 @@
 import { parentPort } from 'node:worker_threads';
 import {
   BotProfileId,
-  GameParameters,
+  SimulationConfig,
   SingleGameResult,
-  TacticId,
 } from '../sim/types';
 import { runSingleGame } from '../sim/engine';
 
 export interface EvalBatchWorkerRequest {
   taskId: number;
   type: 'RUN_EVAL_BATCH';
-  params: GameParameters;
+  params: SimulationConfig;
   tableId: string;
   botProfiles: BotProfileId[];
   jobs: Array<{
@@ -30,7 +29,7 @@ export interface StressBatchWorkerRequest {
   type: 'RUN_STRESS_BATCH';
   jobs: Array<{
     seed: number;
-    params: GameParameters;
+    params: SimulationConfig;
     botProfile: BotProfileId;
   }>;
   needDetailedCapture: boolean;
@@ -38,16 +37,15 @@ export interface StressBatchWorkerRequest {
 
 export interface StressJobOutcome {
   seed: number;
-  params: GameParameters;
+  params: SimulationConfig;
   botProfile: BotProfileId;
   res: SingleGameResult;
   captureCategory:
     | 'INVARIANT_VIOLATION'
-    | 'EARLY_WIPEOUT'
-    | 'STAGNATION'
-    | 'TACTIC_MONOPOLY'
+    | 'MULTI_EXPLOSION'
+    | 'HIGH_DAMAGE_WIPEOUT'
+    | 'STEALTH_MASTERCLASS'
     | 'OMNISCIENT_DEFEAT'
-    | 'RECORD_EDGE_CASES'
     | null;
   captureSummary: string;
   detailedJournal?: string;
@@ -67,19 +65,17 @@ export type WorkerResponseMessage =
   | EvalBatchWorkerResponse
   | StressBatchWorkerResponse;
 
-const ALL_TACTICS: TacticId[] = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
-
 if (parentPort) {
   parentPort.on('message', (msg: WorkerRequestMessage) => {
     if (msg.type === 'RUN_EVAL_BATCH') {
       const results: SingleGameResult[] = [];
       for (const job of msg.jobs) {
         const gRes = runSingleGame(
-          job.seed,
           msg.params,
-          msg.tableId,
           msg.botProfiles,
-          { recordTraces: job.recordTrace }
+          job.seed,
+          msg.tableId,
+          job.recordTrace
         );
         results.push(gRes);
       }
@@ -93,11 +89,11 @@ if (parentPort) {
       const outcomes: StressJobOutcome[] = [];
       for (const job of msg.jobs) {
         const res = runSingleGame(
-          job.seed,
           job.params,
-          `stress_${job.botProfile}`,
           [job.botProfile],
-          { recordTraces: false }
+          job.seed,
+          `stress_${job.botProfile}`,
+          false
         );
 
         let captureCategory: StressJobOutcome['captureCategory'] = null;
@@ -106,36 +102,21 @@ if (parentPort) {
         if (res.violations.length > 0) {
           captureCategory = 'INVARIANT_VIOLATION';
           captureSummary = res.violations[0].message;
-        } else if (res.stagnantTurns > 0) {
-          captureCategory = 'STAGNATION';
-          captureSummary = `${res.stagnantTurns} tour(s) stagnant(s) sans évolution d'état ni mouvement.`;
-        } else if (res.earlyWipeoutTurn !== null) {
-          captureCategory = 'EARLY_WIPEOUT';
-          captureSummary = `Destruction totale de la forêt dès le tour ${res.earlyWipeoutTurn}/${job.params.x} (Bot: ${job.botProfile}).`;
-        } else {
-          const monopolyTac = ALL_TACTICS.find(
-            (t) => res.tacticSlot1Turns[t] === job.params.x
-          );
-          if (monopolyTac) {
-            captureCategory = 'TACTIC_MONOPOLY';
-            captureSummary = `La tactique ${monopolyTac} est restée verrouillée en Case 1 pendant 100% des ${job.params.x} tours.`;
-          } else if (
-            job.botProfile === 'OMNISCIENT' &&
-            res.victoryBracket === 'DEFEAT'
-          ) {
-            captureCategory = 'OMNISCIENT_DEFEAT';
-            captureSummary = `Graine très punitive : même le Bot Omniscient subit une Défaite (${(res.normalizedScore * 100).toFixed(1)}% d'arbres sauvés).`;
-          } else {
-            const totalEdgeInGame =
-              res.edgeCases.H1_noTargetEligible +
-              res.edgeCases.H2_multipleHarvesterCardsSingleTree +
-              res.edgeCases.H3_multipleBulldozerCardsSameCell +
-              res.edgeCases.H4_repairedBulldozerImmunityInCell1;
-            if (totalEdgeInGame >= 5) {
-              captureCategory = 'RECORD_EDGE_CASES';
-              captureSummary = `Forte concentration de cas limites en une seule partie (${totalEdgeInGame} occurrences H1-H4).`;
-            }
-          }
+        } else if (res.explosionsCount >= 2) {
+          captureCategory = 'MULTI_EXPLOSION';
+          captureSummary = `${res.explosionsCount} explosions de machines en une seule partie (${res.totalTreesLost} arbres perdus).`;
+        } else if (res.survivalRateHorizon <= 0.15) {
+          captureCategory = 'HIGH_DAMAGE_WIPEOUT';
+          captureSummary = `Ravage massif : seulement ${(res.survivalRateHorizon * 100).toFixed(1)}% de survie sur l'horizon N×X×a (${res.totalTreesLost} arbres perdus).`;
+        } else if (
+          job.botProfile === 'OMNISCIENT' &&
+          res.victoryBracket === 'DEFEAT'
+        ) {
+          captureCategory = 'OMNISCIENT_DEFEAT';
+          captureSummary = `Graine très punitive : même le Bot Omniscient subit une Défaite (${(res.survivalRateHorizon * 100).toFixed(1)}% de survie).`;
+        } else if (res.trapsPlacedCount + res.sabotagesPlacedCount >= 5 && res.parryAndHSCount >= 3) {
+          captureCategory = 'STEALTH_MASTERCLASS';
+          captureSummary = `Synergie Furtivité exceptionnelle : ${res.trapsPlacedCount} pièges + ${res.sabotagesPlacedCount} sabotages → ${res.parryAndHSCount} mises HS défensives.`;
         }
 
         let detailedJournal: string | undefined;
@@ -144,11 +125,11 @@ if (parentPort) {
           (msg.needDetailedCapture || captureCategory === 'INVARIANT_VIOLATION')
         ) {
           const detailed = runSingleGame(
-            job.seed,
             job.params,
-            `stress_${job.botProfile}`,
             [job.botProfile],
-            { recordTraces: true }
+            job.seed,
+            `stress_${job.botProfile}`,
+            true
           );
           detailedJournal = detailed.textualJournal || '';
         }

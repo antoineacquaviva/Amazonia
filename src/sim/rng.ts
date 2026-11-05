@@ -1,8 +1,6 @@
-import { DiceDrawMode } from './types';
-
 /**
  * Générateur pseudo-aléatoire déterministe (Mulberry32)
- * Permet de rejouer à l'identique n'importe quelle partie ou anomalie à partir de sa graine (seed).
+ * Permet de rejouer à l'identique n'importe quelle partie à partir de sa graine (seed).
  */
 export class SeededRNG {
   private state: number;
@@ -37,31 +35,18 @@ export class SeededRNG {
     return array;
   }
 
-  /** Lance les dés de programmation d'un joueur selon ModeTirageDes */
-  public rollTacticDice(mode: DiceDrawMode): { d1: number; d2: number; chosenSlot: number } {
+  public shuffleInPlace<T>(array: T[]): T[] {
+    return this.shuffle(array);
+  }
+
+  /** Lance les deux dés différenciés D1 (Majeur) et D2 (Mineur) et calcule M = min(D1, D2) */
+  public roll2D6(): { d1: number; d2: number; mIndex: number } {
     const d1 = this.nextInt(1, 6);
     const d2 = this.nextInt(1, 6);
-    let chosenSlot = Math.min(d1, d2);
-    if (mode === '1D6') {
-      chosenSlot = d1;
-    } else if (mode === 'MAX_2D6') {
-      chosenSlot = Math.max(d1, d2);
-    }
-    return { d1, d2, chosenSlot };
+    return {
+      d1,
+      d2,
+      mIndex: Math.min(d1, d2),
+    };
   }
-}
-
-/**
- * Retourne la distribution de probabilité a priori P(k) pour k = 1..6 (index 0..5)
- */
-export function getPriorProbabilities(mode: DiceDrawMode): number[] {
-  if (mode === '1D6') {
-    return [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6];
-  }
-  if (mode === 'MAX_2D6') {
-    // P(k) = (2k - 1) / 36
-    return [1 / 36, 3 / 36, 5 / 36, 7 / 36, 9 / 36, 11 / 36];
-  }
-  // Par défaut MIN_2D6 : P(k) = (13 - 2k) / 36
-  return [11 / 36, 9 / 36, 7 / 36, 5 / 36, 3 / 36, 1 / 36];
 }

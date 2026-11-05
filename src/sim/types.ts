@@ -1,72 +1,217 @@
-export type TacticId = 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'B3';
-
-export type DiceDrawMode = 'MIN_2D6' | '1D6' | 'MAX_2D6';
-export type CellResolutionMode = 'TRANSACTION_FIGEE' | 'SEQUENTIEL';
-export type ScrapyardOrderMode = 'AVANT_PARCELLE_1' | 'APRES_PARCELLE_Q';
-export type TacticUpdateOrderMode = 'ORDRE_PISTE_TAC' | 'FIXE';
-export type GrudgeGranularityMode = 'PAR_CASE' | 'PAR_EVENEMENT' | 'CARTE_ET_DESTRUCTION';
-
-// ============================================================================
-// LES 6 INTERRUPTEURS MÉCANIQUES V1 <-> V2 (Section 1)
-// ============================================================================
-export type RuleNoTargetH1 = 'V1_NO_EFFECT' | 'V2_FALLBACK_DEPLOY_AND_RETREAT';
-export type RuleParryMode = 'V1_UNLIMITED_PER_CELL' | 'V2_UNITARY_PER_CARD';
-export type RulePreventiveDestruction = 'V1_ALLOWED' | 'V2_CARD_REQUIRED';
-export type RuleBulldozerTargeting =
-  | 'V1_SCRAPYARD_ZERO_AND_REVERSE_TIE'
-  | 'V2_FOREST_PRIORITY_AND_UNIFIED_TIE';
-export type RuleScrapyardExit = 'V1_PASSIVE_D1' | 'V2_OFFENSIVE_D2';
-export type RuleInitialSetup = 'V1_SPARSE_RANK3_EMPTY' | 'V2_SMOOTH_DENSE';
-
-export interface MechanicalSwitches {
-  ruleNoTargetH1: RuleNoTargetH1;
-  ruleParryMode: RuleParryMode;
-  rulePreventiveDestruction: RulePreventiveDestruction;
-  ruleBulldozerTargeting: RuleBulldozerTargeting;
-  ruleScrapyardExit: RuleScrapyardExit;
-  ruleInitialSetup: RuleInitialSetup;
-}
+export type TacticType = 'A1' | 'A2' | 'A3' | 'B1' | 'B2' | 'B3';
+export type MachineType = 'A' | 'B';
+export type MachineStatus = 'NORMAL' | 'HS' | 'DESTROYED';
+export type DefenderTrackType = 'TACTICAL' | 'STEALTH';
 
 export type BotProfileId =
-  | 'RANDOM'       // Baseline N0: Aléatoire uniforme
-  | 'BLIND_PROB'   // Témoin Aveugle Probabiliste: Coopératif sans regarder sous son gobelet
-  | 'SELFISH'      // Niveau 1: Égoïste / Myope
-  | 'COOPERATIVE'  // Niveau 2: Coopératif Communicant (Bayésien + Micro-cycles)
-  | 'STRATEGIST'   // Niveau 3: Stratège « Méta-Contremaître » (Apprentissage + Rancune)
-  | 'OMNISCIENT';  // Borne Haute Théorique: Omniscient
+  | 'RANDOM'                 // Bot Naïf / Aléatoire
+  | 'COMBAT_PURE'            // Bot « Combat Pur » (Réactif)
+  | 'HYBRID_STEALTH_COMBAT'  // Bot « Hybride Furtivité + Combat » (Proactif)
+  | 'OMNISCIENT';            // Bot « Omniscient » (Borne Haute Théorique)
 
-export type ThemeVocabularyMode = 'AMAZONIA' | 'ABSTRACT';
-
-export interface GameParameters extends MechanicalSwitches {
-  n: number;                                      // Nombre de joueurs / Secteurs Forestiers [3..6], défaut 4
-  q: number;                                      // Nombre de Parcelles par piste (>= 3), défaut 6
-  a: number;                                      // Nombre initial d'arbres par Parcelle (>= 1), défaut 2
-  asymmetricTrees?: number[];                     // Optionnel: vecteur [a_1, ..., a_q] si asymétrique
-  x: number;                                      // Nombre total de tours (>= 1), défaut 8
-  stockAbatteuses: number | null;                 // null = infini, sinon entier >= 1
-  modeTirageDes: DiceDrawMode;                    // défaut 'MIN_2D6'
-  modeResolutionParcelle: CellResolutionMode;     // défaut 'TRANSACTION_FIGEE'
-  ordreCasse: ScrapyardOrderMode;                 // défaut 'AVANT_PARCELLE_1'
-  immobiliteReparation: boolean;                  // défaut true
-  ordreMajTactiques: TacticUpdateOrderMode;       // défaut 'ORDRE_PISTE_TAC'
-  rancuneTerrassementDegrade: boolean;            // défaut false
-  granulariteRancune: GrudgeGranularityMode;      // défaut 'PAR_CASE'
-  nbRegeneration: number;                         // défaut 1
-  rMaxCycles: number;                             // Nombre max de micro-cycles Étape 2, défaut 5
+export interface InitialMachineConfig {
+  harvesterPos: number;           // Case initiale Abatteuse (>= 1), défaut 1
+  harvesterStatus: 'NORMAL' | 'HS';
+  bulldozerPos: number;           // Case initiale Bulldozer (>= 1), défaut 1
+  bulldozerStatus: 'NORMAL' | 'HS';
+  initialStumpsCell1: number;     // Souches initiales en case 1 (>= 0), défaut 0
 }
 
-// ============================================================================
-// CONSERVATOIRE NIVEAU 1 : LES ÉDITIONS (EditionPreset)
-// ============================================================================
-export interface EditionPreset {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  createdAt: string;
-  isBuiltIn?: boolean;
-  switches: MechanicalSwitches;
-  defaultParams: Partial<GameParameters>;
+export interface SimulationConfig {
+  numPlayers: number;                    // N in {3, 4, 5, 6}, défaut 4
+  numTurns: number;                      // X >= 1, défaut 8
+  initialTreesPerCell: number;           // a >= 1, défaut 3
+  tacticsTrackSetup: TacticType[];       // Longueur 6, défaut ['A1','B1','A2','B2','A3','B3']
+  shuffleTacticsTrack: boolean;          // Si true, mélange tacticsTrackSetup en début de partie
+  initialMachinesState: InitialMachineConfig[]; // Taille N
+  overheatIncludesBaseAction: boolean;   // Variable D (Surchauffe A2/B2) : false = D1, true = D2
+  assaultIncludesBaseAction: boolean;    // Variable D (Assaut A3/B3) : false = D1, true = D2
+  overheatStacksTreeRemoval: boolean;    // Si k>=2 Surchauffes sans Assaut : true = enlève k arbres, false = 1
+  endOfGameRegeneration: boolean;        // Fin de partie : 1 souche -> 1 arbre debout sur chaque case ayant >= 1 souche
+}
+
+export type GameParameters = SimulationConfig;
+
+export interface ForestCellState {
+  cellIndex: number;              // c >= 1 (1-based)
+  standingTrees: number;          // Arbres debout
+  stumps: number;                 // Souches
+  hasTrap: boolean;               // Jeton Piège (max 1 par case)
+  tacticalDefenders: number;      // Jetons Défenseurs posés sur la Piste Tactique ce tour-ci
+  stealthDefenders: number;       // Jetons Défenseurs posés sur la Piste Furtivité ce tour-ci
+  faceUpCards: TacticType[];      // Cartes posées face visible ce tour-ci (génèrent un combat)
+  faceDownCards: TacticType[];    // Cartes posées face cachée ce tour-ci (génèrent une réparation)
+  explodedHereThisTurn: boolean;  // Machine entrée et explosée sur cette case ce tour-ci
+}
+
+export interface MachineState {
+  type: MachineType;              // 'A' (Abatteuse) ou 'B' (Bulldozer)
+  status: MachineStatus;          // 'NORMAL' | 'HS' | 'DESTROYED'
+  position: number | null;        // c >= 1 ou null si 'DESTROYED'
+  startOfTurnPosition: number | null; // Position au tout début du tour avant Étape 3.1
+  hasSabotage: boolean;           // Jeton Sabotage (max 1 par machine)
+}
+
+export interface PlayerForestGroup {
+  playerIndex: number;            // 0 .. N-1 (correspond à J_1 .. J_N)
+  rankOnEvilEye: number;          // 1 .. N
+  cells: ForestCellState[];       // Cases allouées (1 .. maxCells)
+  harvester: MachineState;
+  bulldozer: MachineState;
+}
+
+export interface SecretVillainDraw {
+  rollerPlayerIndex: number;      // Joueur k (0..N-1) qui a lancé les dés
+  d1: number;                     // Dé Majeur (1..6, ligne de la matrice)
+  d2: number;                     // Dé Mineur (1..6, colonne de la matrice)
+  mIndex: number;                 // M = min(d1, d2) in 1..6
+  tactic: TacticType;             // T_k = tacticsTrack[M - 1]
+  targetPlayerIndex: number;      // P_k (0..N-1) déterminé par la Matrice Maîtresse 2D6
+}
+
+export interface DefenderPlacementDecision {
+  playerIndex: number;            // Joueur k qui place son jeton
+  step: 1 | 2;                    // 1 = Défense principale (P=k), 2 = Soutien (P!=k)
+  targetPlayerIndex: number;      // Piste choisie
+  cellIndex: number;              // Case c >= 1
+  track: DefenderTrackType;       // 'TACTICAL' ou 'STEALTH'
+  reason: string;
+}
+
+export interface CombatCellLog {
+  playerIndex: number;
+  cellIndex: number;
+  faceUpCards: TacticType[];
+  engagedHarvester: boolean;
+  engagedBulldozer: boolean;
+  tacticalDefenders: number;
+  trapBonus: number;
+  sabotageBonus: number;
+  defenseScoreS: number;
+  assaultCountK: number;
+  outcome: 'ATTACK_SUCCESS' | 'SIMPLE_PARRY' | 'PARRY_AND_HS';
+  harvesterExploded: boolean;
+  bulldozerExploded: boolean;
+  treesCutToStumps: number;       // Abattages (Arbre debout -> Souche)
+  stumpsCleared: number;          // Terrassements (Souches retirées)
+  treesRemovedByOverheat: number; // Pions retirés directement par Surchauffe A2/B2
+  treesDestroyedByExplosion: number; // Pions détruits par Explosion
+  harvesterBecameHS: boolean;
+  bulldozerBecameHS: boolean;
+}
+
+export interface StealthCellLog {
+  playerIndex: number;
+  cellIndex: number;
+  stealthDefenders: number;
+  outcome: 'SABOTAGE_PLACED' | 'TRAP_PLACED' | 'FAILED_VACATED_OR_EXPLODED';
+  sabotagedMachines: MachineType[];
+}
+
+export interface RepairCellLog {
+  playerIndex: number;
+  cellIndex: number;
+  faceDownCards: TacticType[];
+  harvesterRepaired: boolean;
+  bulldozerRepaired: boolean;
+}
+
+export interface TurnTrace {
+  turn: number;
+  draws: SecretVillainDraw[];
+  placements: DefenderPlacementDecision[];
+  cardPlacements: Array<{
+    fromPlayerIndex: number;
+    targetPlayerIndex: number;
+    tactic: TacticType;
+    machineType: MachineType;
+    machineStatusBefore: MachineStatus;
+    placedCell: number | null;
+    faceUp: boolean;
+    ignoredBecauseDestroyed: boolean;
+  }>;
+  machineMoves: Array<{
+    playerIndex: number;
+    machineType: MachineType;
+    fromCell: number;
+    toCell: number;
+  }>;
+  combats: CombatCellLog[];
+  stealthActions: StealthCellLog[];
+  repairs: RepairCellLog[];
+  treesLostThisTurnPerPlayer: number[]; // Arbres debout ou détruits perdus ce tour par joueur J1..JN
+  totalTreesLostThisTurn: number;
+  endOfTurnSnapshot: Array<{
+    playerIndex: number;
+    harvesterPos: number | null;
+    harvesterStatus: MachineStatus;
+    harvesterSabotaged: boolean;
+    bulldozerPos: number | null;
+    bulldozerStatus: MachineStatus;
+    bulldozerSabotaged: boolean;
+    trappedCells: number[];
+  }>;
+}
+
+export interface InvariantViolationReport {
+  code:
+    | 'I1_SAME_TURN_COMBAT_HS_REPAIRED'
+    | 'I2_NEGATIVE_TREES_OR_STUMPS'
+    | 'I3_DEFENDER_COUNT_MISMATCH'
+    | 'I4_INVALID_TRAP_OR_SABOTAGE';
+  turn: number;
+  phase: string;
+  message: string;
+  seed: number;
+}
+
+export type VictoryBracket =
+  | 'MIRACLE'         // >= 85% survie sur l'horizon de référence
+  | 'MAJOR_VICTORY'   // 65% .. 85%
+  | 'COSTLY_VICTORY'  // 45% .. 65%
+  | 'DEFEAT';         // < 45%
+
+export interface SingleGameResult {
+  seed: number;
+  params: SimulationConfig;
+  tableConfigId: string;
+  botProfiles: BotProfileId[];
+  allocatedCellsPerTrack: number;
+  initialTotalTreesAllocated: number;
+  referenceHorizonTrees: number;        // N * X * a (horizon de référence de la spécification)
+  finalStandingTreesTotal: number;
+  totalTreesLost: number;               // Arbres perdus sur toute la partie (après régénération éventuelle)
+  survivalRateHorizon: number;          // Ratio de survie sur l'horizon N * X * a (borné dans [0, 1])
+  survivalRateVisited: number;          // Ratio de survie sur les cases visitées (1 .. maxPos+1)
+  regeneratedTreesCount: number;
+  victoryBracket: VictoryBracket;
+
+  // Pertes par tour (taille X) et par joueur (taille N)
+  treesLostPerTurn: number[];
+  treesLostPerPlayer: number[];
+  survivingTreesPerPlayerOnHorizon: number[];
+
+  // Compteurs d'événements de la partie (Section 7.3)
+  cutsCount: number;                    // Nombre d'arbres abattus (Arbre -> Souche)
+  clearingsCount: number;               // Nombre d'actions de Terrassement exécutées
+  stumpsClearedCount: number;           // Nombre total de souches rasées
+  overheatTriggersCount: number;        // Nombre de Surchauffes (A2/B2) subies en combat
+  overheatTreesRemovedCount: number;    // Nombre de pions retirés par Surchauffe
+  assaultTriggersCount: number;         // Nombre de cartes Assaut (A3/B3) résolues en combat
+  simpleParriesCount: number;           // Nombre de Parades simples (S == 2 + k_assault)
+  parryAndHSCount: number;              // Nombre de Parades + Mise HS (S >= 3 + k_assault)
+  explosionsCount: number;              // Nombre d'Explosions (A2+A3 ou B2+B3)
+  trapsPlacedCount: number;             // Nombre de Pièges posés en Furtivité
+  sabotagesPlacedCount: number;         // Nombre de Sabotages posés en Furtivité
+  stealthFailuresCount: number;         // Nombre d'échecs de Furtivité (>=2 jetons sur case quittée/explosée)
+  repairsCount: number;                 // Nombre de réparations réussies en Étape 3.4
+  respiteDrawsOnDestroyedCount: number; // Nombre de tirages sans effet sur machine détruite (Arbitrage C1)
+  tacticalDefendersPlaced: number;
+  stealthDefendersPlaced: number;
+
+  violations: InvariantViolationReport[];
+  traces?: TurnTrace[];
+  textualJournal?: string;
 }
 
 export interface TableConfig {
@@ -76,479 +221,120 @@ export interface TableConfig {
   botProfiles: BotProfileId[];
 }
 
-export interface SectorState {
-  sectorIndex: number;
-  initialEyeRank: number;
-  standingTrees: number[];
-  stumps: number[];
-  initialCapacity: number[];
-  harvesters: number[];
-  bulldozerPos: number;
-}
-
-export interface ForemanBrainState {
-  tacticsTrack: TacticId[];
-  eyeTrack: number[];
-}
-
-export interface DefenderTokenPlacement {
-  playerIndex: number;
-  mainCell: number;
-  supportSector: number;
-  supportCell: number;
-  lockCycle: number;
-  redirectedByCupMain: boolean;    // True si le choix diffère de ce qu'il aurait fait sans regarder son gobelet
-  redirectedByCupSupport: boolean;
-}
-
-export interface MicroCycleStepLog {
-  cycle: number;
-  proposals: Array<{
-    playerIndex: number;
-    targetSector: number;
-    targetCell: number;
-    status: 'THINKING' | 'LOCKED';
-    reason: string;
-  }>;
-}
-
-export type CardResolutionStatus = 'SUCCESS' | 'FAIL_PARRIED' | 'FAIL_NO_TARGET';
-
-export interface CellResolutionLog {
-  sectorIndex: number;
-  cellIndex: number;
-  defendersCount: number;
-  harvesterCards: TacticId[];
-  bulldozerCards: TacticId[];
-  harvesterStatuses: CardResolutionStatus[];
-  bulldozerStatuses: CardResolutionStatus[];
-  treesCut: number;
-  stumpsCleared: number;
-  harvestersDestroyed: number;
-  bulldozerDestroyed: boolean;
-  bulldozerRepaired: boolean;
-  bulldozerOffensiveExitCell?: number;
-  degradedBulldozer: boolean;
-  grudgeIncrement: number;
-  tacticsMoved: Array<{
-    tactic: TacticId;
-    fromSlot: number;
-    toSlot: number;
-    status: CardResolutionStatus;
-  }>;
-}
-
-export interface EdgeCaseCounts {
-  H1_noTargetEligible: number;
-  H2_multipleHarvesterCardsSingleTree: number;
-  H3_multipleBulldozerCardsSameCell: number;
-  H4_repairedBulldozerImmunityInCell1: number;
-  H5_degradedBulldozerNoGrudge: number;
-  H6_multiEventSameCellSingleGrudge: number;
-  H7_preventiveDestructionNoCard: number;
-  H7_emptyCellOverDefense: number;
-}
-
-export interface InvariantViolationReport {
-  code:
-    | 'I1_TREE_CONSERVATION'
-    | 'I2_MACHINE_BOUNDS'
-    | 'I3_BRAIN_PERMUTATION'
-    | 'I4_DEFENDER_LEGALITY'
-    | 'DEADLOCK_CYCLE'
-    | 'UNWINNABLE_EARLY_WIPEOUT';
-  turn: number;
-  phase: string;
-  message: string;
-  seed: number;
-  offendingStateSnapshot?: string;
-}
-
-export type InvariantViolation = InvariantViolationReport;
-
-export interface TurnTrace {
-  turn: number;
-  tacticsTrackStart: TacticId[];
-  eyeTrackStart: number[];
-  diceRolls: Array<{
-    playerIndex: number;
-    d1: number;
-    d2: number;
-    chosenSlot: number;
-    tactic: TacticId;
-  }>;
-  step1Defenders: number[];
-  microCycles: MicroCycleStepLog[];
-  finalDefenders: DefenderTokenPlacement[];
-  defendersGrid: number[][];
-  targetedActions: Array<{
-    playerIndex: number;
-    tactic: TacticId;
-    drawnSlot: number;
-    targetSector: number | null;
-    cardsPlaced: Array<{ cell: number; count: number }>;
-    v2FallbackApplied?: boolean;
-  }>;
-  harvesterMovesA1: Array<{
-    sectorIndex: number;
-    fromCell: number;
-    toCell: number;
-    count: number;
-  }>;
-  harvesterReinforcementsA3: Array<{
-    sectorIndex: number;
-    cell: number;
-    count: number;
-    cappedByStock: boolean;
-    isFallbackH1?: boolean;
-  }>;
-  resolutions: CellResolutionLog[];
-  repositionings: Array<{
-    sectorIndex: number;
-    machineType: 'HARVESTER' | 'BULLDOZER';
-    fromCell: number;
-    toCell: number;
-    count: number;
-  }>;
-  tacticsTrackEnd: TacticId[];
-  eyeTrackEnd: number[];
-  standingTreesEnd: number;
-  stumpsEnd: number;
-  clearedEnd: number;
-  activeHarvestersEnd: number;
-  activeBulldozersEnd: number;
-  dilemmaEventsCount: number;
-  totalDecisionsCount: number;
-  step2SavedCellsCount: number; // Cellules sauvées par le réajustement entre r=1 et r_final
-}
-
-export type VictoryBracket =
-  | 'MIRACLE'
-  | 'MAJOR_VICTORY'
-  | 'COSTLY_VICTORY'
-  | 'DEFEAT';
-
-export interface TacticGameStats {
-  draws: number;
-  sumSlotWhenDrawn: number;
-  turnsInSlot1: number;
-  turnsInSlot1Or2: number;
-  cardsPlaced: number;
-  cardsSucceeded: number;
-  cardsParried: number;
-  cardsNoTarget: number;
-  noTargetAtPlacementH1: number;
-  treesCutAttributed: number;
-  harvestersDeployedAttributed: number;
-  stumpsClearedAttributed: number;
-  repairsSucceededAttributed: number;
-  defendersAttractedSum: number;
-  targetedCellsCount: number;
-}
-
-export interface SingleGameResult {
-  seed: number;
-  params: GameParameters;
-  editionId?: string;
-  tableConfigId: string;
-  botProfiles: BotProfileId[];
-  rawScore: number;
-  meanScorePerPlayer: number;
-  normalizedScore: number;
-  victoryBracket: VictoryBracket;
-  regeneratedTreesTotal: number;
-  standingBeforeRegen: number;
-  attritionRateBeforeRegen: number; // % d'arbres coupés ou rasés avant régénération
-  perSectorFinalTrees: number[];
-  perInitialRankFinalTrees: number[];
-  totalHarvestersSpawned: number;
-  totalHarvestersDestroyed: number;
-  totalBulldozersDestroyed: number;
-  totalBulldozersRepaired: number;
-  meanActiveHarvestersPerTurn: number;
-  meanSecondHalfActiveMachines: number;
-  totalCardsPlaced: number;
-  totalCardsSucceeded: number;
-  totalCardsParried: number;
-  totalCardsNoTarget: number;
-  defenderThresholdCounts: {
-    d1: number;
-    d2: number;
-    d3Plus: number;
-  };
-  wastedDefendersCount: number;
-  overkillAvoidedInStep2: number;
-  step2CellsSavedCount: number; // Cases sauvées grâce aux micro-cycles r>=2 par rapport à r=1
-  coordinatedDestructionsCount: number;
-  meanStep2LockCycle: number;
-  meanBrainPermutationsPerTurn: number;
-  meanRepositioningsPerTurn: number;
-  meanMachineMovesAndDestructionsPerTurn: number;
-  dilemmaRate: number;
-  threatToDefenseRatio: number;
-  tacticSlot1Turns: Record<TacticId, number>;
-  perTacticStats: Record<TacticId, TacticGameStats>;
-  // Apprentissage du Contremaître (Axe B)
-  learningAdvancesCount: number;
-  learningRetreatsCount: number;
-  snowballOpportunities: number;
-  snowballSuccesses: number;
-  distinctTacticsInTop2: number;
-  // Connaissance secrète sous le gobelet (Axe D)
-  cupRedirectionCount: number;
-  totalDefenderTokensPlaced: number;
-  surpriseDrawsSlots3To6Count: number;
-  surpriseDrawsParriedCount: number;
-  externalDrawTargetedAllyCount: number;
-  externalDrawProperlyDefendedCount: number;
-  // Capteurs Stress-Test & Invariants
-  edgeCases: EdgeCaseCounts;
-  violations: InvariantViolationReport[];
-  stagnantTurns: number;
-  earlyWipeoutTurn: number | null;
-  traces?: TurnTrace[];
-  textualJournal?: string;
-}
-
-// ============================================================================
-// LES 5 CRITÈRES PRINCIPAUX D'ÉVALUATION (Section 5)
-// ============================================================================
-export interface FiveCriteriaEvaluation {
-  // 1. Simplicité, Fluidité & Sobriété des Règles (/100)
-  simplicitySobriety: {
-    score: number;
-    effectiveActionRateScore: number;      // /40
-    activeTurnManipulationScore: number;   // /30
-    rulebookConceptualSobrietyScore: number; // /30
-    effectiveActionRate: number;
-    manipulationsPerActiveTurn: number;
-    activeSwitchesBonus: string[];
-    interpretation: string;
-  };
-  // 2. Profondeur Stratégique (/100)
-  strategicDepth: {
-    score: number;
-    coherenceN1VsRandomScore: number;      // /15
-    tacticalMasteryN2VsN1Score: number;    // /40
-    metaMasteryN3VsN2Score: number;        // /45
-    cappedByInversion: boolean;
-    deltaN1VsRandom: number;
-    deltaN2VsN1: number;
-    deltaN3VsN2: number;
-    interpretation: string;
-  };
-  // 3. Tension & Courbe Dramatique (/100)
-  tensionDrama: {
-    score: number;
-    bracketDistributionProximityScore: number; // /50
-    activeAttritionScore: number;              // /30
-    dilemmaFrequencyScore: number;             // /20
-    observedBrackets: Record<VictoryBracket, number>;
-    meanAttritionBeforeRegen: number;
-    dilemmaFrequency: number;
-    pressureToDefenseRatio: number;
-    interpretation: string;
-  };
-  // 4. Nécessité de Collaborer (/100)
-  collaborationNecessity: {
-    score: number;
-    netCommunicationGainScore: number;         // /50
-    microCycleRescueImpactScore: number;       // /30
-    omniscientConvergenceScore: number;        // /20
-    cappedByLowSynergy: boolean;
-    deltaCoopVsSelfish: number;
-    step2RescueRatePerTurn: number;
-    omniscientConvergenceRatio: number;
-    interpretation: string;
-  };
-  // 5. Vitalité du Contremaître & Équité des Rangs (/100)
-  foremanVitalityFairness: {
-    score: number;
-    continuousActivityScore: number;           // /35
-    tacticsRenewalScore: number;               // /35
-    initialEyeFairnessScore: number;           // /30
-    nonStagnantTurnRate: number;
-    secondHalfActiveMachines: number;
-    tacticSlot1Entropy: number;
-    slot1MonopolyRate: number;
-    rank1VsOthersGap: number;
-    interpretation: string;
-  };
-  overallDesignScore: number; // Moyenne pondérée sur 100
-}
-
-// ============================================================================
-// LES 4 AXES DIAGNOSTIQUES COMPLÉMENTAIRES (Hors Note Globale — Section 6)
-// ============================================================================
-export interface TacticDiagnosticRow {
-  tactic: TacticId;
-  drawFrequencyRate: number;       // % des dés lancés
-  meanTrackPosition: number;       // 1.0 à 6.0
-  slot1ResidencyRate: number;      // % du temps en Case 1
-  successRate: number;             // % Réussite
-  parriedRate: number;             // % Parée
-  noTargetCardRate: number;        // % Sans objet à la résolution
-  noTargetH1Rate: number;          // % Sans cible à la pose (H1)
-  netTreesCutPerDraw: number;      // Delta T par tirage (pour A1..A3)
-  netHarvestersDeployedPerDraw: number; // Abatteuses déployées par tirage
-  netStumpsClearedPerDraw: number; // Delta S par tirage (pour B1..B3)
-  netRepairsPerDraw: number;       // Réparations réussies par tirage
-  defensiveMobilizationMean: number; // Défenseurs moyens attirés
-  diagnosticLabel:
-    | 'Équilibrée'
-    | 'Sur-dominante'
-    | 'Sous-exploitée / Souvent sans cible'
-    | 'Redondante avec une autre tactique';
-  diagnosticDetail: string;
-}
-
-export interface FourDiagnosticAxes {
-  // Axe A : Estimation de la Durée de Jeu Physique & Ratio Réflexion / Manipulation
-  axisA_PhysicalDuration: {
-    totalEstimatedMinutes: number;
-    minutesPerPlayer: number;
-    meanSecondsPerTurn: number;
-    turn1EstimatedSeconds: number;
-    turnXEstimatedSeconds: number;
-    phase1SecondsTotal: number;
-    phase2CognitiveSecondsTotal: number;
-    phase3ManipulationSecondsTotal: number;
-    cognitiveShareRate: number;     // % Phase 2
-    manipulationShareRate: number;  // % Phase 3
-    manipulationWarningAlert: boolean; // True si manipulation > 45%
-    diagnosticSummary: string;
-  };
-  // Axe B : Intérêt & Impact de l'Apprentissage du Contremaître
-  axisB_ForemanLearning: {
-    meanAdvancesPerTurn: number;
-    meanRetreatsPerTurn: number;
-    snowballRate: number; // P(Réussite t+1 | Réussite t)
-    n3VsN2Slot1ControlDelta: number; // Réduction du temps passé par la tactique dominante en Case 1 grâce à N3
-    n3VsN2SurvivalGain: number;
-    meanDistinctTacticsInTop2: number; // sur 6
-    diagnosticSummary: string;
-  };
-  // Axe C : Bilan Analytique Individuel des 6 Tactiques (A1..B3)
-  axisC_TacticsIndividualBalance: {
-    rows: TacticDiagnosticRow[];
-    diagnosticSummary: string;
-  };
-  // Axe D : Utilité de la Connaissance Privée d'une Attaque (Secret sous le Gobelet)
-  axisD_PrivateCupUtility: {
-    survivalGainFromSecret: number; // Score_N2 - Score_BLIND_PROB
-    cupRedirectionRate: number;     // % de jetons redirigés grâce à la lecture du dé sous le gobelet
-    surpriseAttackParryRateN2: number; // % de parade des tirages Cases 3..6 par N2
-    surpriseAttackParryRateBlind: number; // % de parade des tirages Cases 3..6 par BLIND_PROB
-    secretTransmissionFidelityRate: number; // % de cibles alliées correctement défendues à l'Étape 2
-    diagnosticSummary: string;
-  };
-}
-
 export interface TableConfigSummary {
   tableConfigId: string;
   tableConfigName: string;
   botProfiles: BotProfileId[];
   gamesCount: number;
-  meanRawScore: number;
-  meanScorePerPlayer: number;
-  meanNormalizedScore: number;
-  stdDevNormalizedScore: number;
-  medianNormalizedScore: number;
-  decilesNormalizedScore: number[];
+  meanSurvivalRateHorizon: number;
+  stdDevSurvivalRateHorizon: number;
+  meanSurvivalRateVisited: number;
+  meanTreesLostTotal: number;
+  stdDevTreesLostTotal: number;
+  meanTreesLostPerTurn: number[];       // Moyenne par tour (t = 1..X)
+  stdDevTreesLostPerTurn: number[];     // Écart-type par tour (t = 1..X)
+  meanTreesLostPerPlayer: number[];     // Moyenne par joueur (J1..JN)
+  stdDevTreesLostPerPlayer: number[];   // Écart-type par joueur (J1..JN)
   victoryBracketsRate: Record<VictoryBracket, number>;
-  perInitialRankMeanTrees: number[];
-  meanHarvestersActive: number;
-  meanHarvestersSpawned: number;
-  meanHarvestersDestroyed: number;
-  meanBulldozerTripsToScrap: number;
-  cardParriedRate: number;
-  cardNoTargetRate: number;
-  cardSuccessRate: number;
-  wastedDefenderRate: number;
-  d1Rate: number;
-  d2Rate: number;
-  d3PlusRate: number;
-  tacticSlot1Distribution: Record<TacticId, number>;
+
+  // Moyennes par partie des événements (Section 7.3)
+  meanCuts: number;
+  meanClearings: number;
+  meanStumpsCleared: number;
+  meanOverheats: number;
+  meanOverheatTreesRemoved: number;
+  meanAssaults: number;
+  meanSimpleParries: number;
+  meanParryAndHS: number;
+  meanExplosions: number;
+  meanTrapsPlaced: number;
+  meanSabotagesPlaced: number;
+  meanRepairs: number;
+  meanRespiteDraws: number;
 }
 
-export type AblationCategory =
-  | 'BASE_EDITION_A'
-  | 'TARGET_EDITION_B'
-  | 'ADD_SINGLE_SWITCH_TO_A'
-  | 'REMOVE_SINGLE_SWITCH_FROM_B'
-  | 'FACTORIAL_COCKTAIL'
-  | 'STANDARD_VARIANT';
+export interface FourCriteriaEvaluation {
+  // 1. Intérêt Stratégique & Synergie Furtivité (/100)
+  strategicAndStealthSynergy: {
+    score: number;
+    combatVsRandomGainScore: number;    // /50
+    hybridVsCombatGainScore: number;    // /50
+    deltaCombatVsRandom: number;
+    deltaHybridVsCombat: number;
+    interpretation: string;
+  };
+  // 2. Tension & Courbe d'Attrition (/100)
+  tensionAndAttrition: {
+    score: number;
+    survivalTargetProximityScore: number; // /50
+    hsAndExplosionDynamicsScore: number;  // /50
+    meanSurvivalHorizon: number;
+    meanExplosionsPerGame: number;
+    meanParryAndHSPerGame: number;
+    interpretation: string;
+  };
+  // 3. Efficacité de la Coordination & des Seuils S (/100)
+  coordinationEfficiency: {
+    score: number;
+    parryAndKnockoutRateScore: number;  // /60
+    stealthConversionRateScore: number; // /40
+    combatSuccessDefenseRate: number;
+    trapsAndSabotagesPerGame: number;
+    interpretation: string;
+  };
+  // 4. Équité d'Exposition sur l'Œil (J1 .. JN) (/100)
+  evilEyeFairness: {
+    score: number;
+    j1VsOthersRatio: number;
+    playerLossSpread: number;
+    interpretation: string;
+  };
+  overallDesignScore: number; // Moyenne sur 100
+}
 
 export interface VariantEvaluationResult {
   variantId: string;
   variantLabel: string;
-  ablationCategory?: AblationCategory;
-  modifiedSwitchesFromA?: Array<keyof MechanicalSwitches>;
-  switchesChangedCountFromV1: number;
-  params: GameParameters;
+  optionDTag: 'D1_NONE' | 'D2_OVERHEAT_ONLY' | 'D2_ASSAULT_ONLY' | 'D2_BOTH';
+  params: SimulationConfig;
   tableSummaries: TableConfigSummary[];
-  criteria: FiveCriteriaEvaluation;
-  diagnosticAxes: FourDiagnosticAxes;
-  edgeCaseTotals: EdgeCaseCounts;
-  stagnantTurnsRate: number;
-  slot1MonopolyGamesRate: number;
+  criteria: FourCriteriaEvaluation;
   invariantViolationsCount: number;
   sampleTraces: Array<{
     seed: number;
     tableConfigName: string;
-    rawScore: number;
-    normalizedScore: number;
+    survivalRateHorizon: number;
+    totalTreesLost: number;
+    explosionsCount: number;
     victoryBracket: VictoryBracket;
-    tag: 'TYPICAL' | 'HIGH_TENSION' | 'ANOMALY' | 'EDGE_CASE_HEAVY';
     textualJournal: string;
   }>;
 }
 
 export interface ParameterSweepInput {
-  nValues: number[];
-  qValues: number[];
-  aValues: number[];
-  xValues: number[];
-  stockAbatteusesValues: Array<number | null>;
-  modeTirageDesValues: DiceDrawMode[];
-  modeResolutionParcelleValues: CellResolutionMode[];
-  ordreCasseValues: ScrapyardOrderMode[];
-  immobiliteReparationValues: boolean[];
-  ordreMajTactiquesValues: TacticUpdateOrderMode[];
-  rancuneTerrassementDegradeValues: boolean[];
-  granulariteRancuneValues: GrudgeGranularityMode[];
-  nbRegenerationValues: number[];
-  // Les 6 interrupteurs mécaniques
-  ruleNoTargetH1Values?: RuleNoTargetH1[];
-  ruleParryModeValues?: RuleParryMode[];
-  rulePreventiveDestructionValues?: RulePreventiveDestruction[];
-  ruleBulldozerTargetingValues?: RuleBulldozerTargeting[];
-  ruleScrapyardExitValues?: RuleScrapyardExit[];
-  ruleInitialSetupValues?: RuleInitialSetup[];
-}
-
-export interface AblationConfig {
-  editionAId: string;
-  editionBId: string;
-  editionASwitches: MechanicalSwitches;
-  editionBSwitches: MechanicalSwitches;
-  editionAName: string;
-  editionBName: string;
-  includeLayer2SingleAdditions: boolean;
-  includeLayer3SingleAblations: boolean;
-  includeLayer4FullFactorial: boolean;
+  numPlayersValues: number[];
+  numTurnsValues: number[];
+  initialTreesPerCellValues: number[];
+  overheatIncludesBaseActionValues: boolean[];
+  assaultIncludesBaseActionValues: boolean[];
+  overheatStacksTreeRemovalValues: boolean[];
+  endOfGameRegenerationValues: boolean[];
+  shuffleTacticsTrackValues: boolean[];
+  tacticsTrackSetup: TacticType[];
+  initialHarvesterStatus: 'NORMAL' | 'HS';
+  initialBulldozerStatus: 'NORMAL' | 'HS';
+  initialStumpsCell1: number;
 }
 
 export interface CampaignConfig {
   id: string;
   name: string;
-  type: 'EVALUATION_SWEEP' | 'AB_ABLATION' | 'ORACLE_STRESS_TEST';
+  type: 'MONTE_CARLO_SWEEP' | 'D1_D2_COMPARISON' | 'ORACLE_STRESS_TEST';
   createdAt: string;
   gamesPerVariantAndTable: number;
   sweep: ParameterSweepInput;
   selectedTableConfigs: TableConfig[];
   includeCalibrationTables: boolean;
-  ablationConfig?: AblationConfig;
   targetDurationSeconds?: number | null;
   maxTotalGames?: number;
   randomizeParametersInStress?: boolean;
@@ -563,18 +349,16 @@ export interface StressTestTelemetry {
   invariantsVerifiedCount: number;
   violationsCount: number;
   violationsLog: InvariantViolationReport[];
-  stagnantGamesCount: number;
-  earlyWipeoutGamesCount: number;
-  tacticMonopolyGamesCount: number;
-  omniscientUnwinnableSeedsCount: number;
-  edgeCaseOccurrences: EdgeCaseCounts;
+  totalExplosionsObserved: number;
+  totalParryAndHSObserved: number;
+  totalTrapsAndSabotagesObserved: number;
   scoreDistributionByBotLevel: Record<
     BotProfileId,
     {
       games: number;
-      meanNormalized: number;
-      minNormalized: number;
-      maxNormalized: number;
+      meanSurvivalHorizon: number;
+      meanTreesLost: number;
+      meanExplosions: number;
       defeatRate: number;
       miracleRate: number;
     }
@@ -583,56 +367,13 @@ export interface StressTestTelemetry {
     seed: number;
     category:
       | 'INVARIANT_VIOLATION'
-      | 'EARLY_WIPEOUT'
-      | 'STAGNATION'
-      | 'TACTIC_MONOPOLY'
-      | 'OMNISCIENT_DEFEAT'
-      | 'RECORD_EDGE_CASES';
+      | 'MULTI_EXPLOSION'
+      | 'HIGH_DAMAGE_WIPEOUT'
+      | 'STEALTH_MASTERCLASS'
+      | 'OMNISCIENT_DEFEAT';
     summary: string;
-    params: GameParameters;
+    params: SimulationConfig;
     textualJournal: string;
-  }>;
-}
-
-// ============================================================================
-// CONSERVATOIRE NIVEAU 3 : GRAINES ÉPINGLÉES (PinnedSeed)
-// ============================================================================
-export interface PinnedSeed {
-  id: string;
-  seed: number;
-  title: string;
-  reasonCategory:
-    | 'MAX_DELTA_V1_V2'
-    | 'MAX_SECRET_CUP_IMPACT'
-    | 'CRITICAL_DEFEAT'
-    | 'ANOMALY_OR_EDGE_CASE'
-    | 'USER_PINNED';
-  description: string;
-  createdAt: string;
-  campaignId?: string;
-  defaultParamsA: GameParameters;
-  defaultParamsB: GameParameters;
-  editionAName: string;
-  editionBName: string;
-  botProfile: BotProfileId;
-  scoreANormalized: number;
-  scoreBNormalized: number;
-}
-
-export interface SideBySideComparisonResult {
-  seed: number;
-  botProfile: BotProfileId;
-  editionAName: string;
-  editionBName: string;
-  humanDiffLines: string[];
-  gameA: SingleGameResult;
-  gameB: SingleGameResult;
-  turnComparisons: Array<{
-    turn: number;
-    traceA: TurnTrace;
-    traceB: TurnTrace;
-    hasDivergence: boolean;
-    divergenceSummary: string[];
   }>;
 }
 
@@ -654,6 +395,5 @@ export interface CampaignRecord {
   };
   variantResults: VariantEvaluationResult[];
   stressTelemetry?: StressTestTelemetry;
-  pinnedSeeds?: PinnedSeed[];
   errorMessage?: string;
 }

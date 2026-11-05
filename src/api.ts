@@ -2,17 +2,12 @@ import {
   BotProfileId,
   CampaignConfig,
   CampaignRecord,
-  EditionPreset,
-  GameParameters,
-  MechanicalSwitches,
-  PinnedSeed,
-  SideBySideComparisonResult,
+  SimulationConfig,
   SingleGameResult,
-  ThemeVocabularyMode,
 } from './sim/types';
 import { runSingleGame } from './sim/engine';
 import { generateCampaignMarkdownReport } from './sim/evaluator';
-import { DEFAULT_GAME_PARAMETERS } from './sim/i18n';
+import { DEFAULT_SIMULATION_CONFIG } from './sim/i18n';
 import { browserCampaignManager } from './browserFallback';
 
 let useBrowserFallback = false;
@@ -25,8 +20,6 @@ export interface ServerHealthInfo {
   cpuCount: number;
   workersCount: number;
   activeCampaigns: number;
-  editionsCount: number;
-  pinnedSeedsCount: number;
 }
 
 export function isUsingBrowserFallback(): boolean {
@@ -74,7 +67,12 @@ async function tryBackendJson<T>(
     const res = await fetch(buildApiUrl(endpoint), options);
     const contentType = res.headers.get('content-type') || '';
     if (!res.ok || !contentType.includes('application/json')) {
-      if (res.status === 404 || res.status === 405 || res.status === 501 || res.status === 502) {
+      if (
+        res.status === 404 ||
+        res.status === 405 ||
+        res.status === 501 ||
+        res.status === 502
+      ) {
         useBrowserFallback = true;
       }
       return null;
@@ -138,9 +136,8 @@ export async function removeCampaign(id: string): Promise<void> {
 
 export async function simulateSingleGameTrace(payload: {
   seed: number;
-  params: GameParameters;
+  params: SimulationConfig;
   botProfiles: BotProfileId[];
-  vocabulary: ThemeVocabularyMode;
 }): Promise<SingleGameResult> {
   const data = await tryBackendJson<SingleGameResult>('api/simulate-single', {
     method: 'POST',
@@ -149,107 +146,12 @@ export async function simulateSingleGameTrace(payload: {
   });
   if (data !== null) return data;
   return runSingleGame(
-    Number(payload.seed) || 424242,
-    { ...DEFAULT_GAME_PARAMETERS, ...(payload.params || {}) },
+    { ...DEFAULT_SIMULATION_CONFIG, ...(payload.params || {}) },
+    payload.botProfiles || ['HYBRID_STEALTH_COMBAT'],
+    Number(payload.seed) || 42001,
     'custom_inspection',
-    payload.botProfiles || ['COOPERATIVE'],
-    {
-      recordTraces: true,
-      vocabulary: payload.vocabulary || 'AMAZONIA',
-    }
+    true
   );
-}
-
-// Niveau 1 du Conservatoire : Éditions
-export async function fetchEditions(): Promise<EditionPreset[]> {
-  const data = await tryBackendJson<EditionPreset[]>('api/editions');
-  if (data !== null) return data;
-  return browserCampaignManager.listEditions();
-}
-
-export async function saveEditionPreset(payload: {
-  id?: string;
-  name: string;
-  version?: string;
-  description?: string;
-  switches: MechanicalSwitches;
-  defaultParams?: Partial<GameParameters>;
-}): Promise<EditionPreset> {
-  const data = await tryBackendJson<EditionPreset>('api/editions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (data !== null) return data;
-  return browserCampaignManager.saveEdition(payload);
-}
-
-export async function removeEditionPreset(id: string): Promise<void> {
-  const data = await tryBackendJson<{ deleted: boolean }>(
-    `api/editions/${encodeURIComponent(id)}`,
-    { method: 'DELETE' }
-  );
-  if (data !== null) return;
-  browserCampaignManager.deleteEdition(id);
-}
-
-// Niveau 3 du Conservatoire : Graines Épinglées & Rejeu Côte-à-Côte
-export async function fetchPinnedSeeds(): Promise<PinnedSeed[]> {
-  const data = await tryBackendJson<PinnedSeed[]>('api/seeds');
-  if (data !== null) return data;
-  return browserCampaignManager.listPinnedSeeds();
-}
-
-export async function savePinnedSeedApi(
-  payload: Partial<PinnedSeed> & { seed: number; title: string }
-): Promise<PinnedSeed> {
-  const data = await tryBackendJson<PinnedSeed>('api/seeds', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (data !== null) return data;
-  return browserCampaignManager.savePinnedSeed(payload);
-}
-
-export async function removePinnedSeedApi(id: string): Promise<void> {
-  const data = await tryBackendJson<{ deleted: boolean }>(
-    `api/seeds/${encodeURIComponent(id)}`,
-    { method: 'DELETE' }
-  );
-  if (data !== null) return;
-  browserCampaignManager.deletePinnedSeed(id);
-}
-
-export async function compareSeedSideBySide(payload: {
-  seed: number;
-  editionAId?: string;
-  editionBId?: string;
-  paramsA?: GameParameters;
-  paramsB?: GameParameters;
-  editionAName?: string;
-  editionBName?: string;
-  botProfile?: BotProfileId;
-  vocabulary?: ThemeVocabularyMode;
-}): Promise<SideBySideComparisonResult> {
-  const data = await tryBackendJson<SideBySideComparisonResult>(
-    'api/compare-seed',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (data !== null) return data;
-  return browserCampaignManager.compareSeed(payload);
-}
-
-export function getMarkdownExportUrl(id: string): string {
-  return buildApiUrl(`api/campaigns/${encodeURIComponent(id)}/export/markdown`);
-}
-
-export function getJsonExportUrl(id: string): string {
-  return buildApiUrl(`api/campaigns/${encodeURIComponent(id)}/export/json`);
 }
 
 export function downloadCampaignMarkdown(record: CampaignRecord): void {
@@ -258,7 +160,7 @@ export function downloadCampaignMarkdown(record: CampaignRecord): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `bilan-ia-v2-${record.id}.md`;
+  a.download = `bilan-ia-${record.id}.md`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -271,7 +173,7 @@ export function downloadCampaignJson(record: CampaignRecord): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `bilan-complet-v2-${record.id}.json`;
+  a.download = `bilan-complet-${record.id}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

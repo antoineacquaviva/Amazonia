@@ -1,716 +1,618 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   CampaignConfig,
-  DiceDrawMode,
-  EditionPreset,
-  MechanicalSwitches,
   ParameterSweepInput,
   TableConfig,
-  ThemeVocabularyMode,
+  TacticType,
 } from '../sim/types';
 import {
+  DEFAULT_SWEEP_INPUT,
   DEFAULT_TABLE_CONFIGS,
-  generateHumanRuleDiff,
-  SWITCH_KEYS,
-  SWITCH_META,
-  V1_SWITCHES,
-  V2_SWITCHES,
 } from '../sim/i18n';
-import { GitCompare, Layers, Play } from 'lucide-react';
+import { expandParameterSweep } from '../sim/evaluator';
 
 interface EvaluationBuilderViewProps {
-  editions: EditionPreset[];
-  onLaunchCampaign: (config: Partial<CampaignConfig>) => Promise<void>;
-  vocabulary: ThemeVocabularyMode;
+  onStartCampaign: (config: Partial<CampaignConfig>) => Promise<void>;
+  isSubmitting: boolean;
+}
+
+const TACTIC_PRESETS: Array<{ label: string; setup: TacticType[] }> = [
+  {
+    label: 'Standard Alterné [A1, B1, A2, B2, A3, B3]',
+    setup: ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
+  },
+  {
+    label: 'Abatteuses en tête [A1, A2, A3, B1, B2, B3]',
+    setup: ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'],
+  },
+  {
+    label: 'Bulldozers en tête [B1, B2, B3, A1, A2, A3]',
+    setup: ['B1', 'B2', 'B3', A1_FALLBACK(), 'A2', 'A3'],
+  },
+  {
+    label: 'Haute Intensité en tête [A3, B3, A2, B2, A1, B1]',
+    setup: ['A3', 'B3', 'A2', 'B2', 'A1', 'B1'],
+  },
+];
+
+function A1_FALLBACK(): TacticType {
+  return 'A1';
 }
 
 export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
-  editions,
-  onLaunchCampaign,
+  onStartCampaign,
+  isSubmitting,
 }) => {
-  const [mode, setMode] = useState<'AB_ABLATION' | 'EVALUATION_SWEEP'>(
-    'AB_ABLATION'
+  const [mode, setMode] = useState<'D1_D2_COMPARISON' | 'MONTE_CARLO_SWEEP'>(
+    'D1_D2_COMPARISON'
   );
-  const [name, setName] = useState(
-    'Ablation Croisée Édition 1.0 vs Édition 2.0 (Graines Appariées)'
+  const [campaignName, setCampaignName] = useState<string>(
+    'Comparaison Directe Options D1 vs D2 (Surchauffe × Assaut)'
   );
-  const [gamesPerVariantAndTable, setGamesPerVariantAndTable] = useState(60);
-  const [baseSeed, setBaseSeed] = useState(90210);
+  const [gamesPerVariant, setGamesPerVariant] = useState<number>(200);
+  const [baseSeed, setBaseSeed] = useState<number>(42000);
 
-  // Configuration Ablation A/B
-  const [editionAId, setEditionAId] = useState<string>(
-    editions[0]?.id || 'ed-v1-original'
-  );
-  const [editionBId, setEditionBId] = useState<string>(
-    editions[1]?.id || 'ed-v2-refonte'
-  );
-  const [includeLayer2SingleAdditions, setIncludeLayer2SingleAdditions] =
-    useState(true);
-  const [includeLayer3SingleAblations, setIncludeLayer3SingleAblations] =
-    useState(true);
-  const [includeLayer4FullFactorial, setIncludeLayer4FullFactorial] =
-    useState(false);
-
-  // Paramètres structurels communs ou balayés
-  const [nValues, setNValues] = useState<number[]>([4]);
-  const [qValues, setQValues] = useState<number[]>([6]);
-  const [aValues, setAValues] = useState<number[]>([2]);
-  const [xValues, setXValues] = useState<number[]>([8]);
-  const [nbRegenValues, setNbRegenValues] = useState<number[]>([1]);
-  const [diceModes, setDiceModes] = useState<DiceDrawMode[]>(['MIN_2D6']);
-
-  // En mode EVALUATION_SWEEP : sélection des valeurs V1 / V2 pour chaque interrupteur
-  const [sweepSwitches, setSweepSwitches] = useState<
-    Record<keyof MechanicalSwitches, string[]>
-  >({
-    ruleNoTargetH1: [V2_SWITCHES.ruleNoTargetH1],
-    ruleParryMode: [V2_SWITCHES.ruleParryMode],
-    rulePreventiveDestruction: [V2_SWITCHES.rulePreventiveDestruction],
-    ruleBulldozerTargeting: [V2_SWITCHES.ruleBulldozerTargeting],
-    ruleScrapyardExit: [V2_SWITCHES.ruleScrapyardExit],
-    ruleInitialSetup: [V2_SWITCHES.ruleInitialSetup],
+  const [sweep, setSweep] = useState<ParameterSweepInput>({
+    ...DEFAULT_SWEEP_INPUT,
+    overheatIncludesBaseActionValues: [false, true],
+    assaultIncludesBaseActionValues: [false, true],
   });
 
   const [selectedTableIds, setSelectedTableIds] = useState<string[]>(
     DEFAULT_TABLE_CONFIGS.map((t) => t.id)
   );
-  const [launching, setLaunching] = useState(false);
 
-  const edA = editions.find((e) => e.id === editionAId) || editions[0];
-  const edB =
-    editions.find((e) => e.id === editionBId) || editions[1] || editions[0];
-
-  const diffPreview =
-    edA && edB
-      ? generateHumanRuleDiff(edA.switches, edB.switches, edA.name, edB.name)
-      : null;
-
-  const toggleNumberInList = (
-    list: number[],
-    setter: (v: number[]) => void,
+  const toggleNumberValue = (
+    key: 'numPlayersValues' | 'numTurnsValues' | 'initialTreesPerCellValues',
     val: number
   ) => {
-    if (list.includes(val)) {
-      if (list.length > 1) setter(list.filter((x) => x !== val));
-    } else {
-      setter([...list, val].sort((a, b) => a - b));
-    }
-  };
-
-  const toggleSwitchSweepValue = (
-    key: keyof MechanicalSwitches,
-    val: string
-  ) => {
-    setSweepSwitches((prev) => {
-      const current = prev[key] || [];
-      if (current.includes(val)) {
-        if (current.length <= 1) return prev;
-        return { ...prev, [key]: current.filter((v) => v !== val) };
-      }
-      return { ...prev, [key]: [...current, val] };
+    setSweep((prev) => {
+      const exists = prev[key].includes(val);
+      const next = exists
+        ? prev[key].filter((x) => x !== val)
+        : [...prev[key], val].sort((a, b) => a - b);
+      return { ...prev, [key]: next.length > 0 ? next : [val] };
     });
   };
 
-  // Estimation du nombre de variantes
-  const differingCount = diffPreview ? diffPreview.changedCount : 6;
-  let estimatedVariantsCount = 1;
-  if (mode === 'AB_ABLATION') {
-    if (includeLayer4FullFactorial) {
-      estimatedVariantsCount = Math.pow(2, differingCount);
-    } else {
-      estimatedVariantsCount =
-        2 +
-        (includeLayer2SingleAdditions ? differingCount : 0) +
-        (includeLayer3SingleAblations ? differingCount : 0);
-    }
-  } else {
-    const structCount =
-      nValues.length *
-      qValues.length *
-      aValues.length *
-      xValues.length *
-      nbRegenValues.length *
-      diceModes.length;
-    const swCount = SWITCH_KEYS.reduce(
-      (acc, k) => acc * (sweepSwitches[k]?.length || 1),
-      1
-    );
-    estimatedVariantsCount = structCount * swCount;
-  }
+  const toggleBoolValue = (
+    key:
+      | 'overheatIncludesBaseActionValues'
+      | 'assaultIncludesBaseActionValues'
+      | 'overheatStacksTreeRemovalValues'
+      | 'endOfGameRegenerationValues'
+      | 'shuffleTacticsTrackValues',
+    val: boolean
+  ) => {
+    setSweep((prev) => {
+      const exists = prev[key].includes(val);
+      const next = exists ? prev[key].filter((x) => x !== val) : [...prev[key], val];
+      return { ...prev, [key]: next.length > 0 ? next : [val] };
+    });
+  };
 
-  const selectedTables: TableConfig[] = DEFAULT_TABLE_CONFIGS.filter((t) =>
-    selectedTableIds.includes(t.id)
+  const toggleTableConfig = (id: string) => {
+    setSelectedTableIds((prev) => {
+      const exists = prev.includes(id);
+      const next = exists ? prev.filter((x) => x !== id) : [...prev, id];
+      return next.length > 0 ? next : [id];
+    });
+  };
+
+  const effectiveSweep: ParameterSweepInput = useMemo(() => {
+    if (mode === 'D1_D2_COMPARISON') {
+      return {
+        ...sweep,
+        overheatIncludesBaseActionValues: [false, true],
+        assaultIncludesBaseActionValues: [false, true],
+      };
+    }
+    return sweep;
+  }, [mode, sweep]);
+
+  const expandedVariants = useMemo(
+    () => expandParameterSweep(effectiveSweep),
+    [effectiveSweep]
   );
 
-  const totalEstimatedGames =
-    estimatedVariantsCount *
-    Math.max(1, selectedTables.length) *
-    gamesPerVariantAndTable;
+  const totalSimulationsCount =
+    expandedVariants.length * selectedTableIds.length * gamesPerVariant;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleLaunch = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLaunching(true);
-    try {
-      const sweep: ParameterSweepInput = {
-        nValues,
-        qValues,
-        aValues,
-        xValues,
-        stockAbatteusesValues: [null],
-        modeTirageDesValues: diceModes,
-        modeResolutionParcelleValues: ['TRANSACTION_FIGEE'],
-        ordreCasseValues: ['AVANT_PARCELLE_1'],
-        immobiliteReparationValues: [true],
-        ordreMajTactiquesValues: ['ORDRE_PISTE_TAC'],
-        rancuneTerrassementDegradeValues: [false],
-        granulariteRancuneValues: ['PAR_CASE'],
-        nbRegenerationValues: nbRegenValues,
-        ruleNoTargetH1Values: sweepSwitches.ruleNoTargetH1 as any,
-        ruleParryModeValues: sweepSwitches.ruleParryMode as any,
-        rulePreventiveDestructionValues:
-          sweepSwitches.rulePreventiveDestruction as any,
-        ruleBulldozerTargetingValues:
-          sweepSwitches.ruleBulldozerTargeting as any,
-        ruleScrapyardExitValues: sweepSwitches.ruleScrapyardExit as any,
-        ruleInitialSetupValues: sweepSwitches.ruleInitialSetup as any,
-      };
-
-      await onLaunchCampaign({
-        name,
-        type: mode,
-        gamesPerVariantAndTable,
-        baseSeed,
-        sweep,
-        selectedTableConfigs: selectedTables,
-        includeCalibrationTables: true,
-        ablationConfig:
-          mode === 'AB_ABLATION' && edA && edB
-            ? {
-                editionAId: edA.id,
-                editionBId: edB.id,
-                editionASwitches: edA.switches,
-                editionBSwitches: edB.switches,
-                editionAName: edA.name,
-                editionBName: edB.name,
-                includeLayer2SingleAdditions,
-                includeLayer3SingleAblations,
-                includeLayer4FullFactorial,
-              }
-            : undefined,
-      });
-    } finally {
-      setLaunching(false);
-    }
+    const selectedTables: TableConfig[] = DEFAULT_TABLE_CONFIGS.filter((t) =>
+      selectedTableIds.includes(t.id)
+    );
+    await onStartCampaign({
+      name: campaignName.trim() || 'Campagne Monte-Carlo',
+      type: mode,
+      gamesPerVariantAndTable: gamesPerVariant,
+      sweep: effectiveSweep,
+      selectedTableConfigs: selectedTables,
+      includeCalibrationTables: true,
+      baseSeed,
+    });
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Choix du Mode de Campagne */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-              Configurateur de Test Croisé (Ablation A/B sur Graines Appariées) & Balayage de Variantes
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Évaluez la contribution nette de chacun des 6 interrupteurs mécaniques V1↔V2 sur les mêmes séquences de dés (Paired Seeds) ou balayez les paramètres structurels.
-            </p>
-          </div>
+    <form onSubmit={handleLaunch} className="space-y-6">
+      {/* Choix du mode de campagne */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-1">
+          Configuration d'une Campagne de Simulation Monte-Carlo
+        </h2>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+          Toutes les variantes sont évaluées sur les mêmes graines aléatoires appariées (Paired Seeds) pour isoler l'impact exact de chaque paramètre.
+        </p>
 
-          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
-            <button
-              type="button"
-              onClick={() => {
-                setMode('AB_ABLATION');
-                setName(
-                  'Ablation Croisée Édition 1.0 vs Édition 2.0 (Graines Appariées)'
-                );
-              }}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-                mode === 'AB_ABLATION'
-                  ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <GitCompare className="w-3.5 h-3.5" />
-              1. Test Croisé & Ablation A/B (Paired Seeds)
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMode('EVALUATION_SWEEP');
-                setName('Balayage Paramétrique Multi-Variantes');
-              }}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-                mode === 'EVALUATION_SWEEP'
-                  ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              2. Balayage Paramétrique Libre
-            </button>
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+          <button
+            type="button"
+            onClick={() => {
+              setMode('D1_D2_COMPARISON');
+              setCampaignName(
+                'Comparaison Directe Options D1 vs D2 (Surchauffe × Assaut)'
+              );
+            }}
+            className={`text-left p-4 rounded-lg border transition-colors cursor-pointer ${
+              mode === 'D1_D2_COMPARISON'
+                ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
+                : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+            }`}
+          >
+            <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+              Mode 1 — Comparaison Directe Options D1 vs D2 (2×2)
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+              Croise automatiquement les 4 combinaisons de{' '}
+              <code>overheatIncludesBaseAction</code> (D1/D2) et{' '}
+              <code>assaultIncludesBaseAction</code> (D1/D2) à paramètres fixes ou balayés.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setMode('MONTE_CARLO_SWEEP');
+              setCampaignName('Balayage Paramétrique Monte-Carlo Personnalisé');
+            }}
+            className={`text-left p-4 rounded-lg border transition-colors cursor-pointer ${
+              mode === 'MONTE_CARLO_SWEEP'
+                ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
+                : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+            }`}
+          >
+            <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+              Mode 2 — Balayage Paramétrique Complet (Variables A, B, C, D)
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+              Sélectionnez librement les valeurs de $N$, $X$, $a$, l'ordre de la Piste des Tactiques, l'état initial des machines et les règles spéciales.
+            </p>
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="md:col-span-1">
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Nom de la Campagne
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Nom de la campagne
             </label>
             <input
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-              required
+              value={campaignName}
+              onChange={(e) => setCampaignName(e.target.value)}
+              className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100"
             />
           </div>
+
           <div>
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Parties par (Variante × Table)
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Parties par variante & par profil de Bot
             </label>
             <input
               type="number"
               min={10}
-              max={2000}
-              value={gamesPerVariantAndTable}
-              onChange={(e) =>
-                setGamesPerVariantAndTable(
-                  Math.max(10, Number(e.target.value) || 50)
-                )
-              }
-              className="w-full px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              max={10000}
+              step={50}
+              value={gamesPerVariant}
+              onChange={(e) => setGamesPerVariant(Math.max(10, Number(e.target.value) || 100))}
+              className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100"
             />
           </div>
+
           <div>
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Graine de Départ (Paired Base Seed)
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Graine de base (Paired Seeds)
             </label>
             <input
               type="number"
               value={baseSeed}
               onChange={(e) => setBaseSeed(Number(e.target.value) || 42000)}
-              className="w-full px-3 py-1.5 font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100"
             />
           </div>
         </div>
       </div>
 
-      {/* =================================================================== */}
-      {/* MODE 1 : PROTOCOLE D'ABLATION CROISÉE SUR GRAINES APPARIÉES         */}
-      {/* =================================================================== */}
-      {mode === 'AB_ABLATION' && (
+      {/* SECTION VARIABLES A, B, C, D DE LA SPÉCIFICATION (§2) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Variables A & B : Structure & Piste des Tactiques */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-            Protocole d’Ablation Croisée entre l’Édition A (Base) et l’Édition B (Cible)
-          </h2>
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 border-b border-slate-200 dark:border-slate-800 pb-2">
+            2.1 & 2.2 — Paramètres de Table ($N, X, a$) & Piste des Tactiques
+          </h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            <div>
-              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Édition de Référence A (Point de départ)
-              </label>
-              <select
-                value={editionAId}
-                onChange={(e) => setEditionAId(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded font-medium"
-              >
-                {editions.map((ed) => (
-                  <option key={ed.id} value={ed.id}>
-                    {ed.name} (v{ed.version})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Édition Cible B (Nouvelle proposition)
-              </label>
-              <select
-                value={editionBId}
-                onChange={(e) => setEditionBId(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded font-medium"
-              >
-                {editions.map((ed) => (
-                  <option key={ed.id} value={ed.id}>
-                    {ed.name} (v{ed.version})
-                  </option>
-                ))}
-              </select>
+          {/* N joueurs */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Nombre de joueurs (N = 3, 4, 5 ou 6)
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[3, 4, 5, 6].map((n) => {
+                const active = sweep.numPlayersValues.includes(n);
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => toggleNumberValue('numPlayersValues', n)}
+                    className={`px-3 py-1.5 text-xs font-mono font-semibold rounded border cursor-pointer ${
+                      active
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                    }`}
+                  >
+                    N = {n} joueurs
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Couches d'ablation */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs pt-2">
-            <label className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-start gap-2.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeLayer2SingleAdditions}
-                onChange={(e) =>
-                  setIncludeLayer2SingleAdditions(e.target.checked)
-                }
-                disabled={includeLayer4FullFactorial}
-                className="mt-0.5"
-              />
-              <div>
-                <div className="font-bold text-slate-900 dark:text-slate-100">
-                  Couche 2 — Ajout Unitaire (A + 1 règle de B)
-                </div>
-                <p className="text-slate-500 mt-0.5">
-                  Active un seul interrupteur de B à la fois sur la base A pour mesurer quel changement isolé apporte le plus fort gain.
-                </p>
-              </div>
+          {/* X tours */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Nombre de tours de la partie ($X$)
             </label>
+            <div className="flex flex-wrap gap-2">
+              {[6, 7, 8, 9, 10, 12].map((x) => {
+                const active = sweep.numTurnsValues.includes(x);
+                return (
+                  <button
+                    key={x}
+                    type="button"
+                    onClick={() => toggleNumberValue('numTurnsValues', x)}
+                    className={`px-3 py-1.5 text-xs font-mono font-semibold rounded border cursor-pointer ${
+                      active
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                    }`}
+                  >
+                    X = {x} tours
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-            <label className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-start gap-2.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeLayer3SingleAblations}
-                onChange={(e) =>
-                  setIncludeLayer3SingleAblations(e.target.checked)
-                }
-                disabled={includeLayer4FullFactorial}
-                className="mt-0.5"
-              />
-              <div>
-                <div className="font-bold text-slate-900 dark:text-slate-100">
-                  Couche 3 — Ablation Unitaire (B − 1 règle de B)
-                </div>
-                <p className="text-slate-500 mt-0.5">
-                  Retire un seul interrupteur de B à la fois pour identifier les règles indispensables vs cosmétiques.
-                </p>
-              </div>
+          {/* a arbres par case */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Arbres debout initiaux par case ($a$)
             </label>
+            <div className="flex flex-wrap gap-2">
+              {[2, 3, 4].map((a) => {
+                const active = sweep.initialTreesPerCellValues.includes(a);
+                return (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => toggleNumberValue('initialTreesPerCellValues', a)}
+                    className={`px-3 py-1.5 text-xs font-mono font-semibold rounded border cursor-pointer ${
+                      active
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                    }`}
+                  >
+                    a = {a} arbres/case
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-            <label className="p-3 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 flex items-start gap-2.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeLayer4FullFactorial}
-                onChange={(e) => setIncludeLayer4FullFactorial(e.target.checked)}
-                className="mt-0.5"
-              />
-              <div>
-                <div className="font-bold text-emerald-800 dark:text-emerald-300">
-                  Couche 4 — Plan Factoriel Complet (2^k = {Math.pow(2, differingCount)} cocktails)
-                </div>
-                <p className="text-slate-500 mt-0.5">
-                  Teste toutes les combinaisons hybrides possibles entre A et B pour extraire le Top 10 des « Cocktails Minimalistes ».
-                </p>
-              </div>
+          {/* Piste des Tactiques */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Ordre initial de la Piste des Tactiques (Cases 1 à 6 : M = min(d1, d2))
             </label>
+            <select
+              value={sweep.tacticsTrackSetup.join(',')}
+              onChange={(e) => {
+                const parts = e.target.value.split(',') as TacticType[];
+                if (parts.length === 6) {
+                  setSweep((prev) => ({ ...prev, tacticsTrackSetup: parts }));
+                }
+              }}
+              className="w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100"
+            >
+              {TACTIC_PRESETS.map((pr) => (
+                <option key={pr.label} value={pr.setup.join(',')}>
+                  {pr.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Mélange aléatoire de la piste */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+              Mélange de la Piste des Tactiques en début de partie (<code>shuffleTacticsTrack</code>)
+            </label>
+            <div className="flex gap-2">
+              {[false, true].map((val) => {
+                const active = sweep.shuffleTacticsTrackValues.includes(val);
+                return (
+                  <button
+                    key={String(val)}
+                    type="button"
+                    onClick={() => toggleBoolValue('shuffleTacticsTrackValues', val)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded border cursor-pointer ${
+                      active
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                    }`}
+                  >
+                    {val ? 'Mélangée (Aléatoire)' : 'Ordre Fixe'}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
-      )}
 
-      {/* =================================================================== */}
-      {/* MODE 2 : BALAYAGE DES 6 INTERRUPTEURS EN MODE EVALUATION_SWEEP      */}
-      {/* =================================================================== */}
-      {mode === 'EVALUATION_SWEEP' && (
+        {/* Variables C & D : État initial des machines & Arbitrages Surchauffe / Assaut */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 border-b border-slate-200 dark:border-slate-800 pb-2">
+            2.3 & 2.4 — État Initial des Machines & Arbitrages des Règles (D1 vs D2)
+          </h3>
+
+          {/* État initial Abatteuse & Bulldozer */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Sélection des 6 Interrupteurs Mécaniques (Cochez V1 et/ou V2 pour balayer)
-              </h2>
-              <p className="text-xs text-slate-500">
-                Cochez les deux états d’un interrupteur pour inclure les deux variantes dans le produit cartésien.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() =>
-                  setSweepSwitches({
-                    ruleNoTargetH1: [V1_SWITCHES.ruleNoTargetH1],
-                    ruleParryMode: [V1_SWITCHES.ruleParryMode],
-                    rulePreventiveDestruction: [
-                      V1_SWITCHES.rulePreventiveDestruction,
-                    ],
-                    ruleBulldozerTargeting: [V1_SWITCHES.ruleBulldozerTargeting],
-                    ruleScrapyardExit: [V1_SWITCHES.ruleScrapyardExit],
-                    ruleInitialSetup: [V1_SWITCHES.ruleInitialSetup],
-                  })
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Statut initial Abatteuse (Case 1)
+              </label>
+              <select
+                value={sweep.initialHarvesterStatus}
+                onChange={(e) =>
+                  setSweep((prev) => ({
+                    ...prev,
+                    initialHarvesterStatus: e.target.value as 'NORMAL' | 'HS',
+                  }))
                 }
-                className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded"
+                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
               >
-                Tout fixer en V1
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setSweepSwitches({
-                    ruleNoTargetH1: [V2_SWITCHES.ruleNoTargetH1],
-                    ruleParryMode: [V2_SWITCHES.ruleParryMode],
-                    rulePreventiveDestruction: [
-                      V2_SWITCHES.rulePreventiveDestruction,
-                    ],
-                    ruleBulldozerTargeting: [V2_SWITCHES.ruleBulldozerTargeting],
-                    ruleScrapyardExit: [V2_SWITCHES.ruleScrapyardExit],
-                    ruleInitialSetup: [V2_SWITCHES.ruleInitialSetup],
-                  })
+                <option value="NORMAL">NORMAL (Prête)</option>
+                <option value="HS">HS (Hors Service)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Statut initial Bulldozer (Case 1)
+              </label>
+              <select
+                value={sweep.initialBulldozerStatus}
+                onChange={(e) =>
+                  setSweep((prev) => ({
+                    ...prev,
+                    initialBulldozerStatus: e.target.value as 'NORMAL' | 'HS',
+                  }))
                 }
-                className="px-2.5 py-1 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 rounded"
+                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
               >
-                Tout fixer en V2
-              </button>
+                <option value="NORMAL">NORMAL (Prêt)</option>
+                <option value="HS">HS (Hors Service)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Souches initiales en Case 1
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={4}
+                value={sweep.initialStumpsCell1}
+                onChange={(e) =>
+                  setSweep((prev) => ({
+                    ...prev,
+                    initialStumpsCell1: Math.max(0, Number(e.target.value) || 0),
+                  }))
+                }
+                className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-            {SWITCH_KEYS.map((key) => {
-              const meta = SWITCH_META[key];
-              const selected = sweepSwitches[key] || [];
-              return (
-                <div
-                  key={key}
-                  className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 space-y-1.5"
-                >
-                  <div className="font-bold text-slate-900 dark:text-slate-100">
-                    {meta.title}
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(meta.v1Value)}
-                      onChange={() => toggleSwitchSweepValue(key, meta.v1Value)}
-                    />
-                    <span>{meta.v1Label}</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(meta.v2Value)}
-                      onChange={() => toggleSwitchSweepValue(key, meta.v2Value)}
-                    />
-                    <span className="text-emerald-700 dark:text-emerald-400 font-medium">
-                      {meta.v2Label}
-                    </span>
-                  </label>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Paramètres Structurels du Plateau */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-        <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-          Paramètres Structurels de Plateau (n, q, a, x, Régénération, Loi de Dés)
-        </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          {/* Option D : Surchauffe A2/B2 */}
           <div>
-            <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Nombre de Joueurs / Secteurs (n)
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {[3, 4, 5, 6].map((val) => (
-                <button
-                  key={val}
-                  type="button"
-                  onClick={() => toggleNumberInList(nValues, setNValues, val)}
-                  className={`px-3 py-1 font-mono rounded border ${
-                    nValues.includes(val)
-                      ? 'bg-emerald-700 text-white border-emerald-700'
-                      : 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  n={val}
-                </button>
-              ))}
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Surchauffe A2/B2 inclut l'action de base (<code>overheatIncludesBaseAction</code>)
+            </label>
+            {mode === 'D1_D2_COMPARISON' ? (
+              <div className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                ✓ Balayage automatique [D1 (false) + D2 (true)] activé par le Mode 1
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                {[false, true].map((val) => {
+                  const active = sweep.overheatIncludesBaseActionValues.includes(val);
+                  return (
+                    <button
+                      key={String(val)}
+                      type="button"
+                      onClick={() => toggleBoolValue('overheatIncludesBaseActionValues', val)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded border cursor-pointer ${
+                        active
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                      }`}
+                    >
+                      {val ? 'D2 : Oui (Base + Surchauffe)' : 'D1 : Non (Surchauffe seule)'}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Option D : Assaut A3/B3 */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Assaut A3/B3 inclut l'action de base (<code>assaultIncludesBaseAction</code>)
+            </label>
+            {mode === 'D1_D2_COMPARISON' ? (
+              <div className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                ✓ Balayage automatique [D1 (false) + D2 (true)] activé par le Mode 1
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                {[false, true].map((val) => {
+                  const active = sweep.assaultIncludesBaseActionValues.includes(val);
+                  return (
+                    <button
+                      key={String(val)}
+                      type="button"
+                      onClick={() => toggleBoolValue('assaultIncludesBaseActionValues', val)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded border cursor-pointer ${
+                        active
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                      }`}
+                    >
+                      {val ? 'D2 : Oui (Base + Assaut)' : 'D1 : Non (Assaut seul)'}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Cumul de Surchauffes & Régénération */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Cumul de Surchauffes (<code>overheatStacksTreeRemoval</code>)
+              </label>
+              <div className="flex gap-2">
+                {[true, false].map((val) => {
+                  const active = sweep.overheatStacksTreeRemovalValues.includes(val);
+                  return (
+                    <button
+                      key={String(val)}
+                      type="button"
+                      onClick={() => toggleBoolValue('overheatStacksTreeRemovalValues', val)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded border cursor-pointer ${
+                        active
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                      }`}
+                    >
+                      {val ? 'Oui (k pions)' : 'Non (1 pion)'}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
 
-          <div>
-            <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Parcelles par Piste (q)
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {[5, 6, 7, 8].map((val) => (
-                <button
-                  key={val}
-                  type="button"
-                  onClick={() => toggleNumberInList(qValues, setQValues, val)}
-                  className={`px-3 py-1 font-mono rounded border ${
-                    qValues.includes(val)
-                      ? 'bg-emerald-700 text-white border-emerald-700'
-                      : 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  q={val}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Arbres par Parcelle (a)
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {[1, 2, 3].map((val) => (
-                <button
-                  key={val}
-                  type="button"
-                  onClick={() => toggleNumberInList(aValues, setAValues, val)}
-                  className={`px-3 py-1 font-mono rounded border ${
-                    aValues.includes(val)
-                      ? 'bg-emerald-700 text-white border-emerald-700'
-                      : 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  a={val}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Nombre de Tours (x)
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {[6, 7, 8, 9, 10].map((val) => (
-                <button
-                  key={val}
-                  type="button"
-                  onClick={() => toggleNumberInList(xValues, setXValues, val)}
-                  className={`px-3 py-1 font-mono rounded border ${
-                    xValues.includes(val)
-                      ? 'bg-emerald-700 text-white border-emerald-700'
-                      : 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  x={val}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Régénération Finale (NbRegeneration)
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {[0, 1, 2].map((val) => (
-                <button
-                  key={val}
-                  type="button"
-                  onClick={() =>
-                    toggleNumberInList(nbRegenValues, setNbRegenValues, val)
-                  }
-                  className={`px-3 py-1 font-mono rounded border ${
-                    nbRegenValues.includes(val)
-                      ? 'bg-emerald-700 text-white border-emerald-700'
-                      : 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  +{val} arbre/secteur
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Loi de Tirage des Dés
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {(['MIN_2D6', '1D6', 'MAX_2D6'] as DiceDrawMode[]).map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => {
-                    if (diceModes.includes(d)) {
-                      if (diceModes.length > 1)
-                        setDiceModes(diceModes.filter((m) => m !== d));
-                    } else {
-                      setDiceModes([...diceModes, d]);
-                    }
-                  }}
-                  className={`px-2.5 py-1 font-mono rounded border ${
-                    diceModes.includes(d)
-                      ? 'bg-emerald-700 text-white border-emerald-700'
-                      : 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  {d}
-                </button>
-              ))}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Régénération Fin de Partie (<code>endOfGameRegeneration</code>)
+              </label>
+              <div className="flex gap-2">
+                {[true, false].map((val) => {
+                  const active = sweep.endOfGameRegenerationValues.includes(val);
+                  return (
+                    <button
+                      key={String(val)}
+                      type="button"
+                      onClick={() => toggleBoolValue('endOfGameRegenerationValues', val)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded border cursor-pointer ${
+                        active
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                      }`}
+                    >
+                      {val ? 'Activée (+1 arbre/case)' : 'Désactivée'}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Configurations de Tables de Bots (incluant BLIND_PROB pour l'Axe D) */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
-        <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-          Configurations de Tables de Bots (Incluant le Bot Aveugle Probabiliste pour l’Axe D)
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 text-xs">
-          {DEFAULT_TABLE_CONFIGS.map((table) => {
-            const checked = selectedTableIds.includes(table.id);
+      {/* SÉLECTION DES PROFILS D'IA & LANCEMENT */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-2">
+          Profils de Bots à Évaluer (Phase 2 — Placement des 2 Jetons Défenseurs)
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          {DEFAULT_TABLE_CONFIGS.map((tc) => {
+            const checked = selectedTableIds.includes(tc.id);
             return (
-              <label
-                key={table.id}
-                className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-start gap-2.5 cursor-pointer"
+              <div
+                key={tc.id}
+                onClick={() => toggleTableConfig(tc.id)}
+                className={`p-3 rounded-md border cursor-pointer transition-colors ${
+                  checked
+                    ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30'
+                    : 'border-slate-200 dark:border-slate-800 opacity-60'
+                }`}
               >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => {
-                    if (checked) {
-                      if (selectedTableIds.length > 1) {
-                        setSelectedTableIds(
-                          selectedTableIds.filter((id) => id !== table.id)
-                        );
-                      }
-                    } else {
-                      setSelectedTableIds([...selectedTableIds, table.id]);
-                    }
-                  }}
-                  className="mt-0.5"
-                />
-                <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
-                    {table.name}
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    {table.description}
-                  </p>
+                <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  {tc.name}
                 </div>
-              </label>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                  {tc.description}
+                </p>
+              </div>
             );
           })}
         </div>
-      </div>
 
-      {/* Barre de lancement */}
-      <div className="bg-emerald-950 text-white rounded-lg p-5 flex flex-wrap items-center justify-between gap-4">
-        <div className="text-xs space-y-0.5">
-          <div className="font-bold text-sm">
-            Prêt à lancer : {estimatedVariantsCount} variante(s) × {selectedTables.length} table(s) × {gamesPerVariantAndTable} parties ={' '}
-            <span className="font-mono text-emerald-300">
-              {totalEstimatedGames.toLocaleString('fr-FR')} parties sur Graines Appariées
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+          <div className="text-xs text-slate-600 dark:text-slate-400 tabular-nums">
+            Volume total :{' '}
+            <strong className="text-slate-900 dark:text-slate-100">
+              {expandedVariants.length} variante(s)
+            </strong>{' '}
+            ×{' '}
+            <strong className="text-slate-900 dark:text-slate-100">
+              {selectedTableIds.length} table(s) de Bots
+            </strong>{' '}
+            ×{' '}
+            <strong className="text-slate-900 dark:text-slate-100">
+              {gamesPerVariant} parties
+            </strong>{' '}
+            ={' '}
+            <span className="font-mono font-bold text-emerald-700 dark:text-emerald-400">
+              {totalSimulationsCount.toLocaleString('fr-FR')} parties à simuler
             </span>
           </div>
-          <div className="text-emerald-200/80">
-            Calcul automatique des 5 Critères Principaux (/100), des 4 Axes Diagnostiques Complémentaires et des capteurs H1–H7b.
-          </div>
-        </div>
 
-        <button
-          type="submit"
-          disabled={launching}
-          className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-md transition-colors"
-        >
-          <Play className="w-4 h-4" />
-          {launching
-            ? 'Démarrage en cours...'
-            : 'Lancer la Campagne sur Graines Appariées'}
-        </button>
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-sm font-semibold rounded-md transition-colors cursor-pointer"
+          >
+            {isSubmitting
+              ? 'Démarrage en cours...'
+              : `Lancer la Campagne (${totalSimulationsCount.toLocaleString('fr-FR')} parties)`}
+          </button>
+        </div>
       </div>
     </form>
   );

@@ -2,17 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   CampaignConfig,
   CampaignRecord,
-  EditionPreset,
-  PinnedSeed,
-  ThemeVocabularyMode,
 } from './sim/types';
-import { BUILTIN_EDITIONS, DICTIONARIES } from './sim/i18n';
 import {
   controlCampaign,
   createCampaign,
   fetchCampaigns,
-  fetchEditions,
-  fetchPinnedSeeds,
   fetchServerHealth,
   isUsingBrowserFallback,
   removeCampaign,
@@ -21,21 +15,17 @@ import {
 } from './api';
 import { DashboardView } from './components/DashboardView';
 import { EvaluationBuilderView } from './components/EvaluationBuilderView';
-import { ConservatoryView } from './components/ConservatoryView';
 import { StressTestView } from './components/StressTestView';
 import { JournalsAndExportView } from './components/JournalsAndExportView';
 import { Sun, Moon, RefreshCw } from 'lucide-react';
 
-type ActiveTab = 'dashboard' | 'builder' | 'conservatory' | 'stress' | 'journals';
+type ActiveTab = 'dashboard' | 'builder' | 'stress' | 'journals';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
-  const [vocabulary, setVocabulary] = useState<ThemeVocabularyMode>('AMAZONIA');
   const [darkMode, setDarkMode] = useState<boolean>(false);
 
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
-  const [editions, setEditions] = useState<EditionPreset[]>(BUILTIN_EDITIONS);
-  const [pinnedSeeds, setPinnedSeeds] = useState<PinnedSeed[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
     null
   );
@@ -44,6 +34,7 @@ export default function App() {
   );
   const [fallbackActive, setFallbackActive] = useState<boolean>(false);
   const [retryingBackend, setRetryingBackend] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   useEffect(() => {
@@ -72,20 +63,6 @@ export default function App() {
     }
   }, []);
 
-  const loadConservatory = useCallback(async () => {
-    try {
-      const [eds, seeds] = await Promise.all([
-        fetchEditions(),
-        fetchPinnedSeeds(),
-      ]);
-      setEditions(eds);
-      setPinnedSeeds(seeds);
-      setFallbackActive(isUsingBrowserFallback());
-    } catch (err: any) {
-      console.error('Erreur chargement conservatoire :', err);
-    }
-  }, []);
-
   const handleRetryBackend = useCallback(async () => {
     setRetryingBackend(true);
     setErrorBanner(null);
@@ -94,29 +71,29 @@ export default function App() {
       const health = await fetchServerHealth(true);
       setServerHealth(health);
       setFallbackActive(isUsingBrowserFallback());
-      await Promise.all([loadCampaigns(), loadConservatory()]);
+      await loadCampaigns();
     } finally {
       setRetryingBackend(false);
     }
-  }, [loadCampaigns, loadConservatory]);
+  }, [loadCampaigns]);
 
   useEffect(() => {
-    loadCampaigns();
-    loadConservatory();
-  }, [loadCampaigns, loadConservatory]);
+    void loadCampaigns();
+  }, [loadCampaigns]);
 
-  // Rafraîchissement automatique rapide tant qu'au moins une campagne tourne en arrière-plan
+  // Rafraîchissement automatique tant qu'au moins une campagne tourne en arrière-plan
   useEffect(() => {
     const anyRunning = campaigns.some((c) => c.status === 'RUNNING');
     const intervalMs = anyRunning ? 900 : 5000;
     const timer = setInterval(() => {
-      loadCampaigns();
+      void loadCampaigns();
     }, intervalMs);
     return () => clearInterval(timer);
   }, [campaigns, loadCampaigns]);
 
   const handleLaunchCampaign = async (config: Partial<CampaignConfig>) => {
     setErrorBanner(null);
+    setIsSubmitting(true);
     try {
       const created = await createCampaign(config);
       await loadCampaigns();
@@ -128,6 +105,8 @@ export default function App() {
       }
     } catch (err: any) {
       setErrorBanner(err?.message || 'Erreur lors du lancement de la campagne');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -155,7 +134,6 @@ export default function App() {
   const selectedCampaign =
     campaigns.find((c) => c.id === selectedCampaignId) || campaigns[0] || null;
   const runningCount = campaigns.filter((c) => c.status === 'RUNNING').length;
-  const dict = DICTIONARIES[vocabulary];
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
@@ -170,10 +148,10 @@ export default function App() {
           }}
           className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0"
         >
-          {dict['game.title']}
+          Amazonia : Dernier Rempart
         </a>
 
-        {/* Zone 2 : 5 concise single-line text navigation links */}
+        {/* Zone 2 : 4 concise single-line text navigation links */}
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
           <a
             href="#dashboard"
@@ -187,7 +165,7 @@ export default function App() {
                 : ''
             }`}
           >
-            Tableau & Diagnostics
+            Tableau & Résultats
           </a>
           <a
             href="#builder"
@@ -201,21 +179,7 @@ export default function App() {
                 : ''
             }`}
           >
-            Test Croisé & Variantes
-          </a>
-          <a
-            href="#conservatory"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('conservatory');
-            }}
-            className={`hover:text-slate-900 dark:hover:text-slate-100 transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'conservatory'
-                ? 'text-slate-900 dark:text-slate-100 underline underline-offset-8 decoration-2 decoration-emerald-600'
-                : ''
-            }`}
-          >
-            Conservatoire & Rejeu
+            Configurateur Monte-Carlo
           </a>
           <a
             href="#stress"
@@ -243,7 +207,7 @@ export default function App() {
                 : ''
             }`}
           >
-            Journaux & Référence
+            Combat Log & Matrice 2D6
           </a>
         </nav>
 
@@ -251,17 +215,16 @@ export default function App() {
         <div className="flex items-center gap-3 shrink-0">
           <button
             onClick={() => setActiveTab('builder')}
-            className="px-4 py-2 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            className="px-4 py-2 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Nouveau Test Croisé
+            Nouvelle Campagne
           </button>
         </div>
       </header>
 
-      {/* Barre d'Outils Contextuelle de l'Espace de Travail (Sous le pli du Header) */}
+      {/* Barre d'Outils Contextuelle de l'Espace de Travail */}
       <div className="px-6 py-2.5 bg-slate-100/80 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs">
         <div className="flex flex-wrap items-center gap-2.5 text-slate-600 dark:text-slate-400">
-          {/* Indicateur d'environnement d'exécution (Serveur VM Multi-cœurs vs Fallback Navigateur) */}
           {!fallbackActive && serverHealth ? (
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-100/90 dark:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-300 font-semibold">
               <span className="w-2 h-2 rounded-full bg-emerald-600 dark:bg-emerald-400" />
@@ -279,7 +242,7 @@ export default function App() {
                 type="button"
                 onClick={handleRetryBackend}
                 disabled={retryingBackend}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 font-medium transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 font-medium transition-colors cursor-pointer"
                 title="Réinitialiser useBrowserFallback = false et tester /api/health sur le serveur VM"
               >
                 <RefreshCw
@@ -291,58 +254,31 @@ export default function App() {
           )}
 
           <span aria-hidden="true">·</span>
-          <span>6 Interrupteurs V1↔V2 (64 hybrides)</span>
+          <span>Architecture Combat & Furtivité (Piste Tactique + Piste Furtivité)</span>
           <span aria-hidden="true">·</span>
           <span className="font-mono tabular-nums">
-            {editions.length} éditions · {campaigns.length} campagnes · {pinnedSeeds.length} graines épinglées
+            {campaigns.length} campagne(s)
             {runningCount > 0 ? ` (${runningCount} en cours)` : ''}
           </span>
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Navigation mobile le cas échéant */}
           <div className="flex md:hidden items-center gap-1">
             <select
               value={activeTab}
               onChange={(e) => setActiveTab(e.target.value as ActiveTab)}
               className="px-2 py-1 text-xs bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              <option value="dashboard">Tableau & Diagnostics</option>
-              <option value="builder">Test Croisé & Variantes</option>
-              <option value="conservatory">Conservatoire & Rejeu</option>
+              <option value="dashboard">Tableau & Résultats</option>
+              <option value="builder">Configurateur Monte-Carlo</option>
               <option value="stress">Stress-Test VM</option>
-              <option value="journals">Journaux & Référence</option>
+              <option value="journals">Combat Log & Matrice 2D6</option>
             </select>
           </div>
 
-          {/* Sélecteur de vocabulaire i18n */}
-          <div className="flex items-center gap-1 p-0.5 bg-slate-200/80 dark:bg-slate-800 rounded-md">
-            <button
-              onClick={() => setVocabulary('AMAZONIA')}
-              className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
-                vocabulary === 'AMAZONIA'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
-            >
-              Vocabulaire Amazonia
-            </button>
-            <button
-              onClick={() => setVocabulary('ABSTRACT')}
-              className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
-                vocabulary === 'ABSTRACT'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
-            >
-              Notes Techniques
-            </button>
-          </div>
-
-          {/* Bascule Clair / Sombre */}
           <button
             onClick={() => setDarkMode((d) => !d)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap cursor-pointer"
           >
             {darkMode ? (
               <>
@@ -365,7 +301,7 @@ export default function App() {
           <span>{errorBanner}</span>
           <button
             onClick={() => setErrorBanner(null)}
-            className="font-semibold underline ml-4"
+            className="font-semibold underline ml-4 cursor-pointer"
           >
             Fermer
           </button>
@@ -377,70 +313,45 @@ export default function App() {
         {activeTab === 'dashboard' && (
           <DashboardView
             campaigns={campaigns}
-            selectedCampaign={selectedCampaign}
+            activeCampaign={selectedCampaign}
             onSelectCampaign={(id) => setSelectedCampaignId(id)}
             onControlCampaign={handleControlCampaign}
             onDeleteCampaign={handleDeleteCampaign}
-            onNavigateTab={setActiveTab}
-            onEditionSaved={loadConservatory}
-            vocabulary={vocabulary}
+            onNavigateToBuilder={() => setActiveTab('builder')}
           />
         )}
 
         {activeTab === 'builder' && (
           <EvaluationBuilderView
-            editions={editions}
-            onLaunchCampaign={handleLaunchCampaign}
-            vocabulary={vocabulary}
-          />
-        )}
-
-        {activeTab === 'conservatory' && (
-          <ConservatoryView
-            editions={editions}
-            pinnedSeeds={pinnedSeeds}
-            campaigns={campaigns}
-            onRefreshConservatory={loadConservatory}
-            onSelectCampaignAndOpenDashboard={(id) => {
-              setSelectedCampaignId(id);
-              setActiveTab('dashboard');
-            }}
-            onDeleteCampaign={handleDeleteCampaign}
-            vocabulary={vocabulary}
+            onStartCampaign={handleLaunchCampaign}
+            isSubmitting={isSubmitting}
           />
         )}
 
         {activeTab === 'stress' && (
           <StressTestView
             campaigns={campaigns}
-            selectedCampaign={selectedCampaign}
+            activeCampaign={selectedCampaign}
             onSelectCampaign={(id) => setSelectedCampaignId(id)}
-            onLaunchCampaign={handleLaunchCampaign}
+            onStartCampaign={handleLaunchCampaign}
             onControlCampaign={handleControlCampaign}
-            onInspectJournal={() => setActiveTab('journals')}
-            vocabulary={vocabulary}
+            onDeleteCampaign={handleDeleteCampaign}
+            isSubmitting={isSubmitting}
           />
         )}
 
         {activeTab === 'journals' && (
-          <JournalsAndExportView
-            campaigns={campaigns}
-            editions={editions}
-            selectedCampaign={selectedCampaign}
-            onSelectCampaign={(id) => setSelectedCampaignId(id)}
-            vocabulary={vocabulary}
-            onChangeVocabulary={setVocabulary}
-          />
+          <JournalsAndExportView activeCampaign={selectedCampaign} />
         )}
       </main>
 
       {/* Pied de page sobre */}
       <footer className="px-6 py-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-4">
         <div>
-          Laboratoire de Simulation, d’Ablation Croisée & Conservatoire v2.0 — « {dict['game.title']} »
+          Simulateur Monte-Carlo — « Amazonia : Dernier Rempart » (Nouvelle Architecture Combat & Furtivité)
         </div>
         <div>
-          Compatible Aperçu AI Studio & VM Oracle (Atelier Conception Jeu)
+          Exécution Multi-Cœurs (worker_threads) · Sauvegarde Asynchrone JSON
         </div>
       </footer>
     </div>

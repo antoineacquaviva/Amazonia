@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation complet du simulateur et laboratoire de test pour le jeu coopératif « Amazonia : Dernier Rempart », incluant le moteur de règles formel, les 5 profils de bots avec communication tacite bayésienne, l'évaluation mathématique des 4 critères de game design, le moteur asynchrone de stress-test sur VM Oracle avec persistance JSON et l'export structuré Markdown/JSON pour analyse par IA.",
-  "updatedAt":  "2026-10-31T20:43:56.783710625Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Plan d'implémentation de la refonte complète du simulateur Monte-Carlo multi-cœurs pour la nouvelle version du jeu (Matrice Maîtresse 2D6, Pistes Tactique / Principale / Furtivité, Surchauffe, Assaut, Explosions, Pièges & Sabotages).",
+  "updatedAt": "2026-11-05T12:29:51.019354976Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

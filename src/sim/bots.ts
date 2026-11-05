@@ -1,933 +1,629 @@
 import {
   BotProfileId,
-  DefenderTokenPlacement,
-  ForemanBrainState,
-  GameParameters,
-  MicroCycleStepLog,
-  SectorState,
-  TacticId,
+  DefenderPlacementDecision,
+  MachineState,
+  PlayerForestGroup,
+  SecretVillainDraw,
+  SimulationConfig,
+  TacticType,
 } from './types';
-import { getPriorProbabilities, SeededRNG } from './rng';
-import { computeTacticTarget, getEyeRank, sumArray, TacticTargetPreview } from './targeting';
+import { SeededRNG } from './rng';
 
-export interface CellThreatEstimate {
-  expectedHarvesterCards: number;
-  expectedBulldozerCards: number;
-  certainHarvesterCards: number;
-  certainBulldozerCards: number;
-  harvestersPresentAfterStep2: number;
-  bulldozerPresent: boolean;
-  topContributingTacticSlot: number;
+function getTargetMachineForTactic(
+  group: PlayerForestGroup,
+  tactic: TacticType
+): MachineState {
+  return tactic.startsWith('A') ? group.harvester : group.bulldozer;
 }
 
-export interface Phase2DecisionOutput {
-  step1Defenders: number[];
-  microCycles: MicroCycleStepLog[];
-  finalDefenders: DefenderTokenPlacement[];
-  defendersGrid: number[][];
-  cycle1DefendersGrid: number[][];
-  dilemmaEventsCount: number;
-  totalDecisionsCount: number;
-  overkillAvoidedInStep2: number;
-  cupRedirectionCount: number;
-}
-
-function buildThreatGrid(
-  knownTacticsByPlayer: Array<TacticId | null>,
-  beliefsByOtherPlayer: number[][],
-  tacticPreviews: Record<TacticId, TacticTargetPreview>,
-  sectors: SectorState[],
-  brain: ForemanBrainState,
-  params: GameParameters
-): CellThreatEstimate[][] {
-  const n = params.n;
-  const q = params.q;
-
-  let probNotA1 = 1;
-  const slotA1 = brain.tacticsTrack.indexOf('A1');
-  for (let pIdx = 0; pIdx < n; pIdx++) {
-    if (knownTacticsByPlayer[pIdx] !== null) {
-      if (knownTacticsByPlayer[pIdx] === 'A1') {
-        probNotA1 = 0;
-        break;
-      }
-    } else if (slotA1 >= 0) {
-      probNotA1 *= 1 - beliefsByOtherPlayer[pIdx][slotA1];
-    }
+function getActiveMachines(group: PlayerForestGroup): MachineState[] {
+  const list: MachineState[] = [];
+  if (group.harvester.status !== 'DESTROYED' && group.harvester.position !== null) {
+    list.push(group.harvester);
   }
-  const probAnyA1 = 1 - probNotA1;
-  const a1TargetSector = tacticPreviews['A1'].targetSector;
-
-  const grid: CellThreatEstimate[][] = [];
-  for (let i = 0; i < n; i++) {
-    const row: CellThreatEstimate[] = [];
-    for (let p = 0; p <= q; p++) {
-      let harvAfter = p >= 1 ? sectors[i].harvesters[p] : 0;
-      if (
-        i === a1TargetSector &&
-        tacticPreviews['A1'].cardsPlaced.length > 0 &&
-        p >= 1 &&
-        probAnyA1 > 0.45
-      ) {
-        const fromPrev = p >= 2 ? sectors[i].harvesters[p - 1] : 0;
-        const stayAtQ = p === q ? sectors[i].harvesters[q] : 0;
-        harvAfter =
-          probAnyA1 * (fromPrev + stayAtQ) +
-          (1 - probAnyA1) * sectors[i].harvesters[p];
-      }
-      row.push({
-        expectedHarvesterCards: 0,
-        expectedBulldozerCards: 0,
-        certainHarvesterCards: 0,
-        certainBulldozerCards: 0,
-        harvestersPresentAfterStep2: harvAfter,
-        bulldozerPresent: sectors[i].bulldozerPos === p && p >= 1,
-        topContributingTacticSlot: 0,
-      });
-    }
-    grid.push(row);
+  if (group.bulldozer.status !== 'DESTROYED' && group.bulldozer.position !== null) {
+    list.push(group.bulldozer);
   }
-
-  for (let pIdx = 0; pIdx < n; pIdx++) {
-    const knownTactic = knownTacticsByPlayer[pIdx];
-    if (knownTactic !== null) {
-      const prev = tacticPreviews[knownTactic];
-      const slot = brain.tacticsTrack.indexOf(knownTactic) + 1;
-      if (prev.targetSector !== null && prev.cardsPlaced.length > 0) {
-        for (const c of prev.cardsPlaced) {
-          const cellEst = grid[prev.targetSector][c.cell];
-          if (c.isHarvester) {
-            cellEst.certainHarvesterCards += c.count;
-            cellEst.expectedHarvesterCards += c.count;
-            if (knownTactic === 'A3') {
-              cellEst.harvestersPresentAfterStep2 += c.count;
-            }
-          } else {
-            cellEst.certainBulldozerCards += c.count;
-            cellEst.expectedBulldozerCards += c.count;
-          }
-          if (
-            cellEst.topContributingTacticSlot === 0 ||
-            slot < cellEst.topContributingTacticSlot
-          ) {
-            cellEst.topContributingTacticSlot = slot;
-          }
-        }
-      } else if (
-        prev.v2FallbackDeploySector !== null &&
-        prev.v2FallbackDeploySector !== undefined
-      ) {
-        grid[prev.v2FallbackDeploySector][1].harvestersPresentAfterStep2 += 1;
-      }
-    } else {
-      const dist = beliefsByOtherPlayer[pIdx];
-      for (let sIdx = 0; sIdx < 6; sIdx++) {
-        const prob = dist[sIdx];
-        if (prob <= 0) continue;
-        const tac = brain.tacticsTrack[sIdx];
-        const prev = tacticPreviews[tac];
-        if (prev.targetSector !== null && prev.cardsPlaced.length > 0) {
-          for (const c of prev.cardsPlaced) {
-            const cellEst = grid[prev.targetSector][c.cell];
-            if (c.isHarvester) {
-              cellEst.expectedHarvesterCards += prob * c.count;
-              if (tac === 'A3') {
-                cellEst.harvestersPresentAfterStep2 += prob * c.count;
-              }
-            } else {
-              cellEst.expectedBulldozerCards += prob * c.count;
-            }
-            if (
-              prob >= 0.15 &&
-              (cellEst.topContributingTacticSlot === 0 ||
-                sIdx + 1 < cellEst.topContributingTacticSlot)
-            ) {
-              cellEst.topContributingTacticSlot = sIdx + 1;
-            }
-          }
-        } else if (
-          prev.v2FallbackDeploySector !== null &&
-          prev.v2FallbackDeploySector !== undefined
-        ) {
-          grid[prev.v2FallbackDeploySector][1].harvestersPresentAfterStep2 += prob;
-        }
-      }
-    }
-  }
-
-  return grid;
+  return list;
 }
 
 /**
- * Calcule le gain marginal d'ajouter un Défenseur supplémentaire (passer de currentD à currentD + 1)
- * en tenant compte des 6 interrupteurs mécaniques V1 <-> V2.
+ * Calcule le bonus passif déjà présent sur une case c (Piège + Sabotage de la machine qui va y entrer)
  */
-function evaluateMarginalUtility(
-  profile: BotProfileId,
-  sectorIdx: number,
-  cellIdx: number,
-  currentD: number,
-  threat: CellThreatEstimate,
-  sector: SectorState,
-  brain: ForemanBrainState,
-  params: GameParameters,
-  turn: number
+function getExistingPassiveBonusForNextCell(
+  group: PlayerForestGroup,
+  machine: MachineState
 ): number {
-  const nextD = currentD + 1;
-  const remainingTurns = Math.max(1, params.x - turn + 1);
-  const trees = cellIdx >= 1 ? sector.standingTrees[cellIdx] : 0;
-  const stumps = cellIdx >= 1 ? sector.stumps[cellIdx] : 0;
-
-  const isUnitaryParry = params.ruleParryMode === 'V2_UNITARY_PER_CARD';
-  const isCardRequiredForDestruction =
-    params.rulePreventiveDestruction === 'V2_CARD_REQUIRED';
-  const isOffensiveScrapExit = params.ruleScrapyardExit === 'V2_OFFENSIVE_D2';
-
-  let utility = 0;
-
-  // ==========================================================================
-  // CAS A : LA CASSE (cellIdx === 0)
-  // ==========================================================================
-  if (cellIdx === 0) {
-    if (sector.bulldozerPos === 0 && threat.expectedBulldozerCards > 0.02) {
-      const totalSectorStumps = sumArray(sector.stumps, 1);
-      const dangerMultiplier = 1 + 0.35 * totalSectorStumps;
-
-      if (!isOffensiveScrapExit) {
-        // V1_PASSIVE_D1 : D=1 pare intégralement toutes les cartes Réparation
-        if (nextD === 1) {
-          utility +=
-            Math.min(1.4, threat.expectedBulldozerCards) * 9.5 * dangerMultiplier;
-          if (threat.certainBulldozerCards > 0) utility += 4.0;
-        }
-      } else {
-        // V2_OFFENSIVE_D2 :
-        // - D=0 : sortie offensive (rejoint la 1re souche et la rase immédiatement !)
-        // - D=1 : sortie dégradée en P1 (empêche le rasage immédiat de la souche !)
-        // - D=2 (D >= m_B + 1) : bloque intégralement la réparation et maintient le Bulldozer en Casse !
-        if (nextD === 1) {
-          const immediateStumpSave = totalSectorStumps >= 1 ? 10.5 : 4.5;
-          utility +=
-            Math.min(1.3, threat.expectedBulldozerCards) *
-            immediateStumpSave *
-            (1 + 0.2 * totalSectorStumps);
-          if (threat.certainBulldozerCards > 0) utility += 3.5;
-        } else if (nextD === 2 && profile !== 'SELFISH') {
-          utility +=
-            Math.min(1.3, threat.expectedBulldozerCards) *
-            8.5 *
-            dangerMultiplier;
-          if (threat.certainBulldozerCards > 0) utility += 3.0;
-        } else if (
-          nextD === 3 &&
-          profile !== 'SELFISH' &&
-          threat.expectedBulldozerCards >= 1.5
-        ) {
-          utility += (threat.expectedBulldozerCards - 1) * 7.5;
-        }
-      }
-    }
-    return Math.max(0, utility);
-  }
-
-  // ==========================================================================
-  // CAS B : PARCELLE FORESTIÈRE (cellIdx >= 1)
-  // ==========================================================================
-  if (!isUnitaryParry) {
-    // ------------------------------------------------------------------------
-    // MODE V1 : PARADE ILLIMITÉE PAR CASE
-    // ------------------------------------------------------------------------
-    if (nextD === 1) {
-      if (trees > 0 && threat.expectedHarvesterCards > 0) {
-        const savedTrees = Math.min(trees, threat.expectedHarvesterCards);
-        utility += savedTrees * 10.0;
-        if (threat.certainHarvesterCards > 0) utility += 3.5;
-      }
-      if (stumps >= 2 && threat.expectedBulldozerCards > 0) {
-        const savedStumps = Math.max(0, stumps - threat.expectedBulldozerCards);
-        utility +=
-          savedStumps * 8.5 * Math.min(1, threat.expectedBulldozerCards);
-      }
-    } else if (nextD === 2) {
-      if (profile === 'SELFISH') {
-        if (stumps >= 1 && threat.expectedBulldozerCards > 0) {
-          utility += Math.min(stumps, threat.expectedBulldozerCards) * 6.0;
-        }
-        return utility * 0.35;
-      }
-      if (stumps >= 1 && threat.expectedBulldozerCards > 0) {
-        const extraSavedStumps = Math.min(
-          stumps,
-          Math.ceil(threat.expectedBulldozerCards)
-        );
-        const regenBonus = stumps === 1 && params.nbRegeneration >= 1 ? 6.5 : 3.5;
-        utility +=
-          extraSavedStumps *
-          (9.0 + regenBonus) *
-          Math.min(1.2, threat.expectedBulldozerCards);
-      }
-      // Destruction des Abatteuses en D=2
-      const canDestroyHarvester =
-        !isCardRequiredForDestruction || threat.expectedHarvesterCards > 0.1;
-      if (canDestroyHarvester && threat.harvestersPresentAfterStep2 > 0) {
-        const treesRemainingInSector = sumArray(sector.standingTrees, cellIdx);
-        const futureDamageValue =
-          Math.min(treesRemainingInSector, remainingTurns * 0.75) * 3.8;
-        const cardActivationProb = isCardRequiredForDestruction
-          ? Math.min(1, threat.expectedHarvesterCards)
-          : 1.0;
-        utility +=
-          threat.harvestersPresentAfterStep2 *
-          (5.5 + futureDamageValue) *
-          cardActivationProb;
-      }
-    } else if (nextD === 3) {
-      if (profile === 'SELFISH') return 0.01;
-      const canDestroyBulldozer =
-        !isCardRequiredForDestruction || threat.expectedBulldozerCards > 0.1;
-      if (canDestroyBulldozer && threat.bulldozerPresent) {
-        const totalSectorStumps = sumArray(sector.stumps, 1);
-        const futureThreat = Math.min(remainingTurns, totalSectorStumps + 2) * 3.2;
-        const cardActivationProb = isCardRequiredForDestruction
-          ? Math.min(1, threat.expectedBulldozerCards)
-          : 1.0;
-        utility += (6.5 + futureThreat) * cardActivationProb;
-      }
-    } else {
-      return 0.001;
-    }
-  } else {
-    // ------------------------------------------------------------------------
-    // MODE V2 : PARADE UNITAIRE PAR CARTE (V2_UNITARY_PER_CARD)
-    // ------------------------------------------------------------------------
-    // 1. Ligne Abatteuses : le k-ième défenseur (nextD) pare la k-ième carte Abattage !
-    if (trees > 0 && threat.expectedHarvesterCards > currentD) {
-      const marginalCardProb = Math.min(
-        1,
-        Math.max(0, threat.expectedHarvesterCards - currentD)
-      );
-      if (trees > currentD || currentD === 0) {
-        utility += marginalCardProb * 10.5;
-        if (threat.certainHarvesterCards >= nextD) {
-          utility += 3.8;
-        }
-      }
-    }
-
-    // Destruction des Abatteuses en V2 : requiert D >= m_A + 1 et D >= 2
-    if (nextD >= 2 && profile !== 'SELFISH') {
-      const canDestroyHarvester =
-        !isCardRequiredForDestruction || threat.expectedHarvesterCards > 0.1;
-      if (canDestroyHarvester && threat.harvestersPresentAfterStep2 > 0) {
-        const estimatedCardsToClear = Math.max(
-          1,
-          Math.round(threat.expectedHarvesterCards)
-        );
-        const requiredDForDestruction = isCardRequiredForDestruction
-          ? Math.max(2, estimatedCardsToClear + 1)
-          : Math.max(2, Math.round(threat.expectedHarvesterCards) + 1);
-
-        if (nextD === requiredDForDestruction) {
-          const treesRemainingInSector = sumArray(sector.standingTrees, cellIdx);
-          const futureDamageValue =
-            Math.min(treesRemainingInSector, remainingTurns * 0.75) * 4.0;
-          const activationFactor = isCardRequiredForDestruction
-            ? Math.min(1, threat.expectedHarvesterCards)
-            : 1.0;
-          utility +=
-            threat.harvestersPresentAfterStep2 *
-            (6.0 + futureDamageValue) *
-            activationFactor;
-        }
-      }
-    }
-
-    // 2. Ligne Bulldozer en V2 :
-    // - Parer totalement m_B cartes requiert D >= m_B + 1
-    // - Si 1 <= D <= m_B : terrassement dégradé (m_B - D + 1 souches retirées)
-    // - Détruire le Bulldozer requiert D >= m_B + 2 (soit D=3 pour m_B=1)
-    if (stumps > 0 && threat.expectedBulldozerCards > 0) {
-      const estMB = Math.max(1, Math.round(threat.expectedBulldozerCards));
-      const probB = Math.min(1, threat.expectedBulldozerCards);
-      if (nextD === 1 && stumps >= 2) {
-        // Passe de "toutes les souches rasées" à "estMB souches rasées"
-        const savedStumps = Math.max(0, stumps - estMB);
-        utility += savedStumps * 8.5 * probB;
-      } else if (nextD >= 2 && nextD <= estMB + 1) {
-        // Chaque défenseur supplémentaire jusqu'à m_B + 1 sauve 1 souche du terrassement dégradé !
-        const regenBonus = stumps === 1 && params.nbRegeneration >= 1 ? 6.5 : 3.8;
-        const mult = profile === 'SELFISH' ? 0.35 : 1.0;
-        utility += (9.5 + regenBonus) * probB * mult;
-      }
-    }
-
-    if (nextD >= 3 && profile !== 'SELFISH' && threat.bulldozerPresent) {
-      const canDestroyBull =
-        !isCardRequiredForDestruction || threat.expectedBulldozerCards > 0.1;
-      const estMB = Math.max(1, Math.round(threat.expectedBulldozerCards));
-      if (canDestroyBull && nextD === estMB + 2) {
-        const totalSectorStumps = sumArray(sector.stumps, 1);
-        const futureThreat = Math.min(remainingTurns, totalSectorStumps + 2) * 3.4;
-        const activationFactor = isCardRequiredForDestruction
-          ? Math.min(1, threat.expectedBulldozerCards)
-          : 1.0;
-        utility += (7.0 + futureThreat) * activationFactor;
-      }
-    }
-  }
-
-  // --- Bonus spécifique au Bot Stratège « Méta-Contremaître » (Niveau 3) ---
-  if (profile === 'STRATEGIST' || profile === 'OMNISCIENT') {
-    const slot = threat.topContributingTacticSlot;
-    const parriesCard =
-      (nextD === 1 && threat.expectedHarvesterCards > 0) ||
-      (nextD >= 2 && threat.expectedBulldozerCards > 0);
-
-    if (parriesCard && slot >= 1 && slot <= 3) {
-      const learningWeight = (4 - slot) * 2.6 * (remainingTurns / params.x);
-      utility += learningWeight;
-    }
-
-    const currentRank = getEyeRank(brain, sectorIdx);
-    const sectorStumps = sumArray(sector.stumps, 1);
-    const sectorTrees = sumArray(sector.standingTrees, 1);
-    if (utility > 0 && currentRank > 1) {
-      if (
-        params.ruleBulldozerTargeting === 'V1_SCRAPYARD_ZERO_AND_REVERSE_TIE'
-      ) {
-        if (sectorStumps >= 2 && sector.bulldozerPos >= 1) {
-          utility += 1.8;
-        } else if (
-          sectorTrees >= params.q * params.a - 1 &&
-          sumArray(sector.harvesters, 1) >= 1
-        ) {
-          utility -= 1.1;
-        }
-      } else {
-        // En V2, le Rang 1 attire TOUTES les égalités (A et B) :
-        // Le Stratège évite de déclencher une Rancune mineure si son secteur est déjà fragile
-        if (sectorStumps >= 2 || sectorTrees <= 4) {
-          utility -= 0.9;
-        }
-      }
-    }
-  }
-
-  return Math.max(0, utility);
-}
-
-function chooseBestStep1Cell(
-  profile: BotProfileId,
-  j: number,
-  knownTactics: Array<TacticId | null>,
-  priors: number[],
-  tacticPreviews: Record<TacticId, TacticTargetPreview>,
-  sectors: SectorState[],
-  brain: ForemanBrainState,
-  params: GameParameters,
-  turn: number
-): { chosenCell: number; isDilemma: boolean } {
-  const q = params.q;
-  const n = params.n;
-  const initialBeliefs: number[][] = Array.from({ length: n }, () => [...priors]);
-  const threatGrid = buildThreatGrid(
-    knownTactics,
-    initialBeliefs,
-    tacticPreviews,
-    sectors,
-    brain,
-    params
-  );
-
-  const utilities: Array<{ cell: number; util: number }> = [];
-  for (let p = 0; p <= q; p++) {
-    const u = evaluateMarginalUtility(
-      profile === 'BLIND_PROB' ? 'COOPERATIVE' : profile,
-      j,
-      p,
-      0,
-      threatGrid[j][p],
-      sectors[j],
-      brain,
-      params,
-      turn
-    );
-    utilities.push({ cell: p, util: u });
-  }
-
-  utilities.sort((a, b) => b.util - a.util);
-  const isDilemma =
-    utilities.length >= 2 &&
-    utilities[0].util > 1.0 &&
-    utilities[1].util >= utilities[0].util * 0.85;
-
-  if (utilities[0].util > 0.05) {
-    return { chosenCell: utilities[0].cell, isDilemma };
-  }
-
-  let fallbackCell = 1;
-  for (let p = q; p >= 1; p--) {
-    if (sectors[j].harvesters[p] > 0 || sectors[j].bulldozerPos === p) {
-      fallbackCell = p;
-      break;
-    }
-  }
-  return { chosenCell: fallbackCell, isDilemma: false };
+  if (machine.status !== 'NORMAL' || machine.position === null) return 0;
+  const targetCellIdx = machine.position + 1;
+  const cell = group.cells[targetCellIdx - 1];
+  let bonus = cell?.hasTrap ? 1 : 0;
+  if (machine.hasSabotage) bonus += 1;
+  return bonus;
 }
 
 /**
- * Exécute l'intégralité de la Phase 2 (Étape 1 + Inférence Bayésienne + Étape 2 en micro-cycles)
+ * Exécute la Phase 2 (Étape 2.1 + Étape 2.2) pour les N joueurs selon leurs profils de Bots
  */
-export function runPhase2Mobilization(
+export function executePhase2Bots(
+  config: SimulationConfig,
+  groups: PlayerForestGroup[],
+  draws: SecretVillainDraw[],
   botProfiles: BotProfileId[],
-  drawnTactics: TacticId[],
-  sectors: SectorState[],
-  brain: ForemanBrainState,
-  params: GameParameters,
-  turn: number,
   rng: SeededRNG
-): Phase2DecisionOutput {
-  const n = params.n;
-  const q = params.q;
-  const priors = getPriorProbabilities(params.modeTirageDes);
+): DefenderPlacementDecision[] {
+  const N = config.numPlayers;
+  const decisions: DefenderPlacementDecision[] = [];
 
-  const tacticPreviews: Record<TacticId, TacticTargetPreview> = {
-    A1: computeTacticTarget('A1', sectors, brain, params),
-    A2: computeTacticTarget('A2', sectors, brain, params),
-    A3: computeTacticTarget('A3', sectors, brain, params),
-    B1: computeTacticTarget('B1', sectors, brain, params),
-    B2: computeTacticTarget('B2', sectors, brain, params),
-    B3: computeTacticTarget('B3', sectors, brain, params),
-  };
+  // Si toute la table est OMNISCIENT, on utilise le planificateur global Omniscient
+  if (botProfiles.every((b) => b === 'OMNISCIENT')) {
+    return executeOmniscientTeamPhase2(config, groups, draws);
+  }
 
-  let dilemmaEventsCount = 0;
-  let totalDecisionsCount = 0;
-  let cupRedirectionCount = 0;
+  // ==========================================================================
+  // ÉTAPE 2.1 : Défense principale (chaque joueur k pose 1 jeton sur sa piste k)
+  // ==========================================================================
+  for (let k = 0; k < N; k++) {
+    const profile = botProfiles[k % botProfiles.length];
+    const ownGroup = groups[k];
+    const ownDraw = draws[k];
 
-  // ============================================================================
-  // ÉTAPE 1 : Placement simultané du 1er Défenseur (sur sa propre piste j)
-  // ============================================================================
-  const step1Defenders: number[] = new Array(n).fill(0);
-  const blindStep1Defenders: number[] = new Array(n).fill(0);
-  const redirectedMain: boolean[] = new Array(n).fill(false);
+    let chosenCell = 1;
+    let chosenTrack: 'TACTICAL' | 'STEALTH' = 'TACTICAL';
+    let reason = '';
 
-  const allNullTactics: Array<TacticId | null> = new Array(n).fill(null);
-
-  for (let j = 0; j < n; j++) {
-    const profile = botProfiles[j];
     if (profile === 'RANDOM') {
-      step1Defenders[j] = rng.nextInt(0, q);
-      blindStep1Defenders[j] = step1Defenders[j];
-      continue;
-    }
-
-    // Calcul du choix témoin "sans regarder le gobelet" (pour mesurer l'Axe D)
-    const blindChoice = chooseBestStep1Cell(
-      'BLIND_PROB',
-      j,
-      allNullTactics,
-      priors,
-      tacticPreviews,
-      sectors,
-      brain,
-      params,
-      turn
-    );
-    blindStep1Defenders[j] = blindChoice.chosenCell;
-
-    if (profile === 'BLIND_PROB') {
-      step1Defenders[j] = blindChoice.chosenCell;
-      totalDecisionsCount++;
-      if (blindChoice.isDilemma) dilemmaEventsCount++;
-      continue;
-    }
-
-    const knownTactics: Array<TacticId | null> = new Array(n).fill(null);
-    if (profile === 'OMNISCIENT') {
-      for (let i = 0; i < n; i++) knownTactics[i] = drawnTactics[i];
-    } else {
-      knownTactics[j] = drawnTactics[j];
-    }
-
-    const actualChoice = chooseBestStep1Cell(
-      profile,
-      j,
-      knownTactics,
-      priors,
-      tacticPreviews,
-      sectors,
-      brain,
-      params,
-      turn
-    );
-    step1Defenders[j] = actualChoice.chosenCell;
-    totalDecisionsCount++;
-    if (actualChoice.isDilemma) dilemmaEventsCount++;
-
-    if (step1Defenders[j] !== blindStep1Defenders[j]) {
-      redirectedMain[j] = true;
-      cupRedirectionCount++;
-    }
-  }
-
-  // ============================================================================
-  // INFÉRENCE BAYÉSIENNE APRÈS RÉVÉLATION DE L'ÉTAPE 1
-  // ============================================================================
-  const updatedBeliefsPerPlayer: number[][] = Array.from({ length: n }, () => [
-    ...priors,
-  ]);
-  for (let i = 0; i < n; i++) {
-    const chosenCell = step1Defenders[i];
-    const matchingSlots: number[] = [];
-    for (let sIdx = 0; sIdx < 6; sIdx++) {
-      const tac = brain.tacticsTrack[sIdx];
-      const prev = tacticPreviews[tac];
-      if (
-        prev.targetSector === i &&
-        prev.cardsPlaced.some((c) => c.cell === chosenCell)
-      ) {
-        matchingSlots.push(sIdx);
-      }
-    }
-    if (matchingSlots.length > 0) {
-      const posterior = [...priors];
-      for (const sIdx of matchingSlots) {
-        const likelihoodBoost = sIdx >= 2 ? 3.2 : 1.7;
-        posterior[sIdx] *= likelihoodBoost;
-      }
-      const norm = posterior.reduce((acc, v) => acc + v, 0);
-      if (norm > 0) {
-        updatedBeliefsPerPlayer[i] = posterior.map((v) => v / norm);
-      }
-    }
-  }
-
-  // ============================================================================
-  // ÉTAPE 2 : Le Soutien & la Coordination (Boucle de R_max micro-cycles)
-  // ============================================================================
-  const rMax = Math.max(1, params.rMaxCycles || 5);
-  const microCycles: MicroCycleStepLog[] = [];
-
-  const currentSupportSector: number[] = new Array(n).fill(0);
-  const currentSupportCell: number[] = new Array(n).fill(0);
-  const isLocked: boolean[] = new Array(n).fill(false);
-  const lockCycle: number[] = new Array(n).fill(rMax);
-  const redirectedSupport: boolean[] = new Array(n).fill(false);
-
-  const cycle1DefendersGrid: number[][] = Array.from({ length: n }, () =>
-    new Array(q + 1).fill(0)
-  );
-
-  const fastLockDecodedTactic: Array<TacticId | null> = new Array(n).fill(null);
-  let overkillAvoidedInStep2 = 0;
-
-  for (let cycle = 1; cycle <= rMax; cycle++) {
-    const cycleLog: MicroCycleStepLog = {
-      cycle,
-      proposals: [],
-    };
-
-    const nextSector = [...currentSupportSector];
-    const nextCell = [...currentSupportCell];
-    const nextLocked = [...isLocked];
-    const reasons: string[] = new Array(n).fill('');
-
-    for (let j = 0; j < n; j++) {
-      if (isLocked[j]) {
-        reasons[j] = 'Déjà verrouillé sur Définitif';
-        continue;
-      }
-
-      const profile = botProfiles[j];
-      const evalProfile: BotProfileId =
-        profile === 'BLIND_PROB' ? 'COOPERATIVE' : profile;
-
-      if (profile === 'RANDOM') {
-        const alliedSectors = [];
-        for (let i = 0; i < n; i++) if (i !== j) alliedSectors.push(i);
-        nextSector[j] = alliedSectors[rng.nextInt(0, alliedSectors.length - 1)];
-        nextCell[j] = rng.nextInt(0, q);
-        nextLocked[j] = true;
-        lockCycle[j] = cycle;
-        reasons[j] = 'Placement aléatoire uniforme';
-        continue;
-      }
-
-      const knownTactics: Array<TacticId | null> = new Array(n).fill(null);
-      if (profile === 'OMNISCIENT') {
-        for (let i = 0; i < n; i++) knownTactics[i] = drawnTactics[i];
-      } else if (profile !== 'BLIND_PROB') {
-        knownTactics[j] = drawnTactics[j];
-        if (profile === 'COOPERATIVE' || profile === 'STRATEGIST') {
-          for (let i = 0; i < n; i++) {
-            if (i !== j && fastLockDecodedTactic[i] !== null) {
-              knownTactics[i] = fastLockDecodedTactic[i];
-            }
-          }
-        }
-      }
-
-      const beliefs =
-        profile === 'SELFISH' || profile === 'BLIND_PROB'
-          ? Array.from({ length: n }, () => [...priors])
-          : updatedBeliefsPerPlayer;
-
-      const threatGrid = buildThreatGrid(
-        knownTactics,
-        beliefs,
-        tacticPreviews,
-        sectors,
-        brain,
-        params
-      );
-
-      // Au cycle 1, calculer aussi ce que le bot aurait choisi sans regarder son gobelet
-      let blindBestSector = -1;
-      let blindBestCell = -1;
-      if (cycle === 1 && profile !== 'BLIND_PROB') {
-        const blindGrid = buildThreatGrid(
-          allNullTactics,
-          Array.from({ length: n }, () => [...priors]),
-          tacticPreviews,
-          sectors,
-          brain,
-          params
-        );
-        let bestU = -1;
-        for (let sec = 0; sec < n; sec++) {
-          if (sec === j) continue;
-          for (let cell = 0; cell <= q; cell++) {
-            const baseD = step1Defenders[sec] === cell ? 1 : 0;
-            const u = evaluateMarginalUtility(
-              evalProfile,
-              sec,
-              cell,
-              baseD,
-              blindGrid[sec][cell],
-              sectors[sec],
-              brain,
-              params,
-              turn
-            );
-            if (u > bestU) {
-              bestU = u;
-              blindBestSector = sec;
-              blindBestCell = cell;
-            }
-          }
-        }
-      }
-
-      // Signal Fast Lock au cycle 1 (uniquement si le bot connaît son dé et qu'il cible un allié)
-      const myTacticPreview = tacticPreviews[drawnTactics[j]];
-      if (
-        cycle === 1 &&
-        (profile === 'COOPERATIVE' || profile === 'STRATEGIST') &&
-        myTacticPreview.targetSector !== null &&
-        myTacticPreview.targetSector !== j &&
-        myTacticPreview.cardsPlaced.length > 0
-      ) {
-        const targetSec = myTacticPreview.targetSector;
-        let bestCell = myTacticPreview.cardsPlaced[0].cell;
-        let bestScore = -1;
-        for (const c of myTacticPreview.cardsPlaced) {
-          const baseD = step1Defenders[targetSec] === c.cell ? 1 : 0;
-          const u = evaluateMarginalUtility(
-            evalProfile,
-            targetSec,
-            c.cell,
-            baseD,
-            threatGrid[targetSec][c.cell],
-            sectors[targetSec],
-            brain,
-            params,
-            turn
-          );
-          if (u > bestScore) {
-            bestScore = u;
-            bestCell = c.cell;
-          }
-        }
-        nextSector[j] = targetSec;
-        nextCell[j] = bestCell;
-        nextLocked[j] = true;
-        lockCycle[j] = 1;
-        reasons[j] = `Signal Fast Lock (r=1) : certitude sur ${drawnTactics[j]} ciblant Secteur ${targetSec + 1}`;
-        if (targetSec !== blindBestSector || bestCell !== blindBestCell) {
-          redirectedSupport[j] = true;
-          cupRedirectionCount++;
-        }
-        continue;
-      }
-
-      const countOtherDefenders = (sec: number, cell: number): number => {
-        let d = step1Defenders[sec] === cell ? 1 : 0;
-        if (cycle >= 2 && profile !== 'SELFISH') {
-          for (let other = 0; other < n; other++) {
-            if (other === j) continue;
-            if (
-              currentSupportSector[other] === sec &&
-              currentSupportCell[other] === cell
-            ) {
-              if (isLocked[other] || other < j) {
-                d += 1;
-              }
-            }
-          }
-        }
-        return d;
-      };
-
-      const candidates: Array<{ sector: number; cell: number; util: number }> = [];
-      for (let sec = 0; sec < n; sec++) {
-        if (sec === j) continue;
-        for (let cell = 0; cell <= q; cell++) {
-          const dBefore = countOtherDefenders(sec, cell);
-          const u = evaluateMarginalUtility(
-            evalProfile,
-            sec,
-            cell,
-            dBefore,
-            threatGrid[sec][cell],
-            sectors[sec],
-            brain,
-            params,
-            turn
-          );
-          candidates.push({ sector: sec, cell, util: u });
-        }
-      }
-
-      candidates.sort((a, b) => b.util - a.util);
-      totalDecisionsCount++;
-      if (
-        candidates.length >= 2 &&
-        candidates[0].util > 1.0 &&
-        candidates[1].util >= candidates[0].util * 0.85
-      ) {
-        dilemmaEventsCount++;
-      }
-
-      const best = candidates[0];
-      if (
-        cycle >= 2 &&
-        (best.sector !== currentSupportSector[j] ||
-          best.cell !== currentSupportCell[j])
-      ) {
-        overkillAvoidedInStep2++;
-      }
-
-      nextSector[j] = best.sector;
-      nextCell[j] = best.cell;
-
-      if (
-        cycle === 1 &&
-        profile !== 'BLIND_PROB' &&
-        (best.sector !== blindBestSector || best.cell !== blindBestCell)
-      ) {
-        redirectedSupport[j] = true;
-        cupRedirectionCount++;
-      }
-
-      if (profile === 'SELFISH') {
-        nextLocked[j] = true;
-        lockCycle[j] = cycle;
-        reasons[j] = 'Verrouillage immédiat sans concertation (Égoïste N1)';
-      } else if (cycle === rMax) {
-        nextLocked[j] = true;
-        lockCycle[j] = cycle;
-        reasons[j] = 'Verrouillage final (fin des micro-cycles)';
-      } else if (
-        cycle >= 2 &&
-        best.sector === currentSupportSector[j] &&
-        best.cell === currentSupportCell[j]
-      ) {
-        nextLocked[j] = true;
-        lockCycle[j] = cycle;
-        reasons[j] = 'Convergence atteinte avec les propositions alliées';
+      const active = getActiveMachines(ownGroup);
+      if (active.length > 0) {
+        const m = active[rng.nextInt(0, active.length - 1)];
+        const basePos = m.position || 1;
+        chosenCell = rng.nextFloat() < 0.5 ? basePos : basePos + 1;
       } else {
-        nextLocked[j] = false;
-        reasons[j] =
-          cycle === 1
-            ? 'Proposition En réflexion (attente des signaux alliés / appel au soutien)'
-            : 'Réallocation vers une seconde menace pour éviter le sur-investissement';
+        chosenCell = rng.nextInt(1, 2);
       }
-    }
-
-    for (let j = 0; j < n; j++) {
-      currentSupportSector[j] = nextSector[j];
-      currentSupportCell[j] = nextCell[j];
-      isLocked[j] = nextLocked[j];
-
-      cycleLog.proposals.push({
-        playerIndex: j,
-        targetSector: currentSupportSector[j],
-        targetCell: currentSupportCell[j],
-        status: isLocked[j] ? 'LOCKED' : 'THINKING',
-        reason: reasons[j],
-      });
-
+      chosenTrack = rng.nextFloat() < 0.5 ? 'TACTICAL' : 'STEALTH';
+      reason = 'Placement aléatoire (p ou p+1, Tactique ou Furtivité)';
+    } else if (profile === 'COMBAT_PURE') {
+      // Bot « Combat Pur » (Réactif)
+      const drawnMachine = getTargetMachineForTactic(ownGroup, ownDraw.tactic);
       if (
-        cycle === 1 &&
-        isLocked[j] &&
-        (botProfiles[j] === 'COOPERATIVE' || botProfiles[j] === 'STRATEGIST')
+        ownDraw.targetPlayerIndex === k &&
+        drawnMachine.status === 'NORMAL' &&
+        drawnMachine.position !== null
       ) {
-        for (let sIdx = 0; sIdx < 6; sIdx++) {
-          const tac = brain.tacticsTrack[sIdx];
-          const prev = tacticPreviews[tac];
-          if (
-            prev.targetSector === currentSupportSector[j] &&
-            prev.cardsPlaced.some((c) => c.cell === currentSupportCell[j])
-          ) {
-            fastLockDecodedTactic[j] = tac;
-            break;
-          }
+        chosenCell = drawnMachine.position + 1;
+        chosenTrack = 'TACTICAL';
+        reason = `Tirage personnel (${ownDraw.tactic}) ciblant sa propre machine ${drawnMachine.type} NORMAL en c=${drawnMachine.position} -> Défense Tactique en c=${chosenCell}`;
+      } else if (
+        ownGroup.harvester.status === 'NORMAL' &&
+        ownGroup.harvester.position !== null
+      ) {
+        chosenCell = ownGroup.harvester.position + 1;
+        chosenTrack = 'TACTICAL';
+        reason = `Couverture réactive par défaut de son Abatteuse NORMAL en c=${chosenCell}`;
+      } else if (
+        ownGroup.bulldozer.status === 'NORMAL' &&
+        ownGroup.bulldozer.position !== null
+      ) {
+        chosenCell = ownGroup.bulldozer.position + 1;
+        chosenTrack = 'TACTICAL';
+        reason = `Couverture réactive de son Bulldozer NORMAL en c=${chosenCell}`;
+      } else {
+        chosenCell =
+          ownGroup.harvester.position || ownGroup.bulldozer.position || 1;
+        chosenTrack = 'TACTICAL';
+        reason = 'Machines immobilisées/détruites -> Garde Tactique de repli';
+      }
+    } else {
+      // HYBRID_STEALTH_COMBAT (ou OMNISCIENT individuel dans une table mixte)
+      const drawnMachine = getTargetMachineForTactic(ownGroup, ownDraw.tactic);
+      const selfTargetedNormal =
+        ownDraw.targetPlayerIndex === k &&
+        drawnMachine.status === 'NORMAL' &&
+        drawnMachine.position !== null;
+
+      if (selfTargetedNormal && drawnMachine.position !== null) {
+        chosenCell = drawnMachine.position + 1;
+        chosenTrack = 'TACTICAL';
+        reason = `Menace personnelle directe (${ownDraw.tactic}) sur machine ${drawnMachine.type} -> Piste Tactique en c=${chosenCell}`;
+      } else {
+        // Vérifier si une machine NORMAL a déjà un Piège en p+1 ou un Sabotage (opportunité de Parade/Mise HS facile)
+        const harv = ownGroup.harvester;
+        const bull = ownGroup.bulldozer;
+        const harvBonus = getExistingPassiveBonusForNextCell(ownGroup, harv);
+        const bullBonus = getExistingPassiveBonusForNextCell(ownGroup, bull);
+
+        if (harv.status === 'NORMAL' && harv.position !== null && harvBonus >= 1) {
+          chosenCell = harv.position + 1;
+          chosenTrack = 'TACTICAL';
+          reason = `Exploitation Piège/Sabotage existant (bonus +${harvBonus}) devant l'Abatteuse en c=${chosenCell}`;
+        } else if (
+          bull.status === 'NORMAL' &&
+          bull.position !== null &&
+          bullBonus >= 1
+        ) {
+          chosenCell = bull.position + 1;
+          chosenTrack = 'TACTICAL';
+          reason = `Exploitation Piège/Sabotage existant (bonus +${bullBonus}) devant le Bulldozer en c=${chosenCell}`;
+        } else if (
+          k === 0 &&
+          harv.status === 'NORMAL' &&
+          harv.position !== null
+        ) {
+          // J1 est très exposé sur la Matrice 2D6 : protège son Abatteuse en Tactique
+          chosenCell = harv.position + 1;
+          chosenTrack = 'TACTICAL';
+          reason = `Joueur J1 très exposé -> Couverture Tactique prioritaire en c=${chosenCell}`;
+        } else if (
+          harv.status === 'HS' &&
+          harv.position !== null &&
+          !harv.hasSabotage
+        ) {
+          // Machine HS sur place : excellente cible pour poser un Sabotage en Furtivité
+          chosenCell = harv.position;
+          chosenTrack = 'STEALTH';
+          reason = `Initiative Furtivité (1/2) sur Abatteuse HS en c=${chosenCell} pour préparer un Sabotage`;
+        } else if (
+          bull.status === 'HS' &&
+          bull.position !== null &&
+          !bull.hasSabotage
+        ) {
+          chosenCell = bull.position;
+          chosenTrack = 'STEALTH';
+          reason = `Initiative Furtivité (1/2) sur Bulldozer HS en c=${chosenCell} pour préparer un Sabotage`;
+        } else if (
+          harv.status === 'NORMAL' &&
+          harv.position !== null &&
+          !ownGroup.cells[harv.position]?.hasTrap
+        ) {
+          // Prépare un Piège ou Sabotage en p+1 via la Piste Furtivité
+          chosenCell = harv.position + 1;
+          chosenTrack = 'STEALTH';
+          reason = `Initiative Furtivité (1/2) en c=${chosenCell} (devant Abatteuse) pour poser Piège ou Sabotage`;
+        } else if (harv.status === 'NORMAL' && harv.position !== null) {
+          chosenCell = harv.position + 1;
+          chosenTrack = 'TACTICAL';
+          reason = `Défense Tactique en c=${chosenCell}`;
+        } else if (bull.status === 'NORMAL' && bull.position !== null) {
+          chosenCell = bull.position + 1;
+          chosenTrack = 'TACTICAL';
+          reason = `Défense Tactique en c=${chosenCell}`;
+        } else {
+          chosenCell = 2;
+          chosenTrack = 'STEALTH';
+          reason = 'Préparation de Piège Furtivité en c=2';
         }
       }
     }
 
-    if (cycle === 1) {
-      for (let j = 0; j < n; j++) {
-        cycle1DefendersGrid[j][step1Defenders[j]] += 1;
-        cycle1DefendersGrid[currentSupportSector[j]][currentSupportCell[j]] += 1;
-      }
+    const safeCell = Math.max(1, Math.min(ownGroup.cells.length - 1, chosenCell));
+    if (chosenTrack === 'TACTICAL') {
+      ownGroup.cells[safeCell - 1].tacticalDefenders += 1;
+    } else {
+      ownGroup.cells[safeCell - 1].stealthDefenders += 1;
     }
 
-    microCycles.push(cycleLog);
-
-    if (isLocked.every((locked) => locked)) {
-      break;
-    }
-  }
-
-  const defendersGrid: number[][] = Array.from({ length: n }, () =>
-    new Array(q + 1).fill(0)
-  );
-  const finalDefenders: DefenderTokenPlacement[] = [];
-
-  for (let j = 0; j < n; j++) {
-    defendersGrid[j][step1Defenders[j]] += 1;
-    defendersGrid[currentSupportSector[j]][currentSupportCell[j]] += 1;
-    finalDefenders.push({
-      playerIndex: j,
-      mainCell: step1Defenders[j],
-      supportSector: currentSupportSector[j],
-      supportCell: currentSupportCell[j],
-      lockCycle: lockCycle[j],
-      redirectedByCupMain: redirectedMain[j],
-      redirectedByCupSupport: redirectedSupport[j],
+    decisions.push({
+      playerIndex: k,
+      step: 1,
+      targetPlayerIndex: k,
+      cellIndex: safeCell,
+      track: chosenTrack,
+      reason,
     });
   }
 
-  return {
-    step1Defenders,
-    microCycles,
-    finalDefenders,
-    defendersGrid,
-    cycle1DefendersGrid,
-    dilemmaEventsCount,
-    totalDecisionsCount,
-    overkillAvoidedInStep2,
-    cupRedirectionCount,
-  };
+  // ==========================================================================
+  // ÉTAPE 2.2 : Soutien et coordination (chaque joueur k pose 1 jeton sur P != k)
+  // ==========================================================================
+  for (let k = 0; k < N; k++) {
+    const profile = botProfiles[k % botProfiles.length];
+    const ownDraw = draws[k];
+
+    let targetP = k === 0 ? 1 : 0;
+    let chosenCell = 1;
+    let chosenTrack: 'TACTICAL' | 'STEALTH' = 'TACTICAL';
+    let reason = '';
+
+    if (profile === 'RANDOM') {
+      const otherPlayers = Array.from({ length: N }, (_, idx) => idx).filter(
+        (idx) => idx !== k
+      );
+      targetP = otherPlayers[rng.nextInt(0, otherPlayers.length - 1)];
+      const allyGroup = groups[targetP];
+      const active = getActiveMachines(allyGroup);
+      if (active.length > 0) {
+        const m = active[rng.nextInt(0, active.length - 1)];
+        const basePos = m.position || 1;
+        chosenCell = rng.nextFloat() < 0.5 ? basePos : basePos + 1;
+      } else {
+        chosenCell = rng.nextInt(1, 2);
+      }
+      chosenTrack = rng.nextFloat() < 0.5 ? 'TACTICAL' : 'STEALTH';
+      reason = `Soutien aléatoire sur J${targetP + 1}`;
+    } else if (profile === 'COMBAT_PURE') {
+      const drawnTargetP = ownDraw.targetPlayerIndex;
+      const drawnGroup = groups[drawnTargetP];
+      const drawnMachine = getTargetMachineForTactic(drawnGroup, ownDraw.tactic);
+
+      if (
+        drawnTargetP !== k &&
+        drawnMachine.status === 'NORMAL' &&
+        drawnMachine.position !== null
+      ) {
+        targetP = drawnTargetP;
+        chosenCell = drawnMachine.position + 1;
+        chosenTrack = 'TACTICAL';
+        reason = `Alerte tirage (${ownDraw.tactic} -> J${targetP + 1}) : soutien Tactique en c=${chosenCell}`;
+      } else {
+        // Chercher un allié (priorité J1) où un jeton Tactique permet d'atteindre S=2 ou S=3 sur p+1 d'une machine NORMAL
+        let foundBest = false;
+        for (let pIdx = 0; pIdx < N; pIdx++) {
+          if (pIdx === k) continue;
+          const g = groups[pIdx];
+          for (const m of [g.harvester, g.bulldozer]) {
+            if (m.status === 'NORMAL' && m.position !== null) {
+              const cIdx = m.position + 1;
+              const cell = g.cells[cIdx - 1];
+              const currentS =
+                (cell?.tacticalDefenders || 0) +
+                getExistingPassiveBonusForNextCell(g, m);
+              if (currentS >= 1 && currentS <= 2) {
+                targetP = pIdx;
+                chosenCell = cIdx;
+                chosenTrack = 'TACTICAL';
+                reason = `Soutien Tactique sur J${targetP + 1} en c=${chosenCell} pour atteindre S=${currentS + 1} (Parade / Mise HS)`;
+                foundBest = true;
+                break;
+              }
+            }
+          }
+          if (foundBest) break;
+        }
+
+        if (!foundBest) {
+          targetP = k === 0 ? 1 : 0;
+          const fallbackGroup = groups[targetP];
+          const m =
+            fallbackGroup.harvester.status === 'NORMAL'
+              ? fallbackGroup.harvester
+              : fallbackGroup.bulldozer;
+          chosenCell = (m.position || 1) + 1;
+          chosenTrack = 'TACTICAL';
+          reason = `Soutien Tactique par défaut sur J${targetP + 1} en c=${chosenCell}`;
+        }
+      }
+    } else {
+      // HYBRID_STEALTH_COMBAT
+      const drawnTargetP = ownDraw.targetPlayerIndex;
+      const drawnGroup = groups[drawnTargetP];
+      const drawnMachine = getTargetMachineForTactic(drawnGroup, ownDraw.tactic);
+
+      // 1. Si son propre dé attaque un allié (P_k != k) sur une machine NORMAL :
+      //    On vérifie s'il vaut mieux renforcer la Piste Tactique en p+1
+      if (
+        drawnTargetP !== k &&
+        drawnMachine.status === 'NORMAL' &&
+        drawnMachine.position !== null
+      ) {
+        const cIdx = drawnMachine.position + 1;
+        const cell = drawnGroup.cells[cIdx - 1];
+        const currentS =
+          (cell?.tacticalDefenders || 0) +
+          getExistingPassiveBonusForNextCell(drawnGroup, drawnMachine);
+        const isAssault =
+          ownDraw.tactic === 'A3' || ownDraw.tactic === 'B3' ? 1 : 0;
+
+        // Si on peut atteindre au moins la Parade (S >= 2 + isAssault) ou s'il y a déjà un défenseur
+        if (currentS + 1 >= 2 + isAssault || currentS >= 1) {
+          targetP = drawnTargetP;
+          chosenCell = cIdx;
+          chosenTrack = 'TACTICAL';
+          reason = `Alerte tirage (${ownDraw.tactic} -> J${targetP + 1}) : complète la défense Tactique en c=${chosenCell} (S estimé=${currentS + 1})`;
+        } else if (cell && cell.stealthDefenders === 1) {
+          // Si l'allié avait ouvert une paire de Furtivité sur cette même case p+1, compléter la Furtivité pose un Sabotage !
+          targetP = drawnTargetP;
+          chosenCell = cIdx;
+          chosenTrack = 'STEALTH';
+          reason = `Complète la paire Furtivité (2/2) en c=${chosenCell} chez J${targetP + 1} pour saboter la machine entrante`;
+        } else {
+          targetP = drawnTargetP;
+          chosenCell = cIdx;
+          chosenTrack = 'TACTICAL';
+          reason = `Alerte tirage (${ownDraw.tactic} -> J${targetP + 1}) : pose un Défenseur Tactique en c=${chosenCell}`;
+        }
+      } else {
+        // 2. Sinon, chercher en priorité une paire de Furtivité ouverte (stealthDefenders === 1) chez un allié
+        let completedStealthPair = false;
+        for (let pIdx = 0; pIdx < N; pIdx++) {
+          if (pIdx === k) continue;
+          const g = groups[pIdx];
+          for (const cell of g.cells) {
+            if (cell.stealthDefenders === 1) {
+              targetP = pIdx;
+              chosenCell = cell.cellIndex;
+              chosenTrack = 'STEALTH';
+              reason = `Coordination Furtivité (2/2) chez J${targetP + 1} en c=${chosenCell} -> Sabotage ou Piège garanti`;
+              completedStealthPair = true;
+              break;
+            }
+          }
+          if (completedStealthPair) break;
+        }
+
+        // 3. À défaut de paire Furtivité ouverte, chercher une case Tactique alliée avec S=1 ou S=2 pour passer un palier (S=2 Parade ou S=3 Mise HS)
+        if (!completedStealthPair) {
+          let foundTacticalSynergy = false;
+          for (let pIdx = 0; pIdx < N; pIdx++) {
+            if (pIdx === k) continue;
+            const g = groups[pIdx];
+            for (const m of [g.harvester, g.bulldozer]) {
+              if (m.status === 'NORMAL' && m.position !== null) {
+                const cIdx = m.position + 1;
+                const cell = g.cells[cIdx - 1];
+                const currentS =
+                  (cell?.tacticalDefenders || 0) +
+                  getExistingPassiveBonusForNextCell(g, m);
+                if (currentS >= 1 && currentS <= 2) {
+                  targetP = pIdx;
+                  chosenCell = cIdx;
+                  chosenTrack = 'TACTICAL';
+                  reason = `Synergie Tactique chez J${targetP + 1} en c=${chosenCell} pour atteindre S=${currentS + 1}`;
+                  foundTacticalSynergy = true;
+                  break;
+                }
+              }
+            }
+            if (foundTacticalSynergy) break;
+          }
+
+          if (!foundTacticalSynergy) {
+            targetP = k === 0 ? 1 : 0;
+            const g = groups[targetP];
+            const m =
+              g.harvester.status === 'NORMAL' ? g.harvester : g.bulldozer;
+            chosenCell = (m.position || 1) + 1;
+            chosenTrack = 'TACTICAL';
+            reason = `Soutien Tactique préventif sur J${targetP + 1} en c=${chosenCell}`;
+          }
+        }
+      }
+    }
+
+    const allyGroup = groups[targetP];
+    const safeCell = Math.max(
+      1,
+      Math.min(allyGroup.cells.length - 1, chosenCell)
+    );
+    if (chosenTrack === 'TACTICAL') {
+      allyGroup.cells[safeCell - 1].tacticalDefenders += 1;
+    } else {
+      allyGroup.cells[safeCell - 1].stealthDefenders += 1;
+    }
+
+    decisions.push({
+      playerIndex: k,
+      step: 2,
+      targetPlayerIndex: targetP,
+      cellIndex: safeCell,
+      track: chosenTrack,
+      reason,
+    });
+  }
+
+  return decisions;
+}
+
+/**
+ * Planificateur coopératif Omniscient (Borne Haute Théorique) :
+ * Connaît tous les tirages (T_k, P_k) du tour et alloue les jetons Étape 2.1 (sur P=k) et Étape 2.2 (sur P!=k)
+ * pour maximiser les Mises HS (S = 3 + k_assault) et Parades (S = 2 + k_assault), puis utilise les paires restantes en Furtivité.
+ */
+function executeOmniscientTeamPhase2(
+  config: SimulationConfig,
+  groups: PlayerForestGroup[],
+  draws: SecretVillainDraw[]
+): DefenderPlacementDecision[] {
+  const N = config.numPlayers;
+  const decisions: DefenderPlacementDecision[] = [];
+
+  // Simuler quelles cases vont recevoir des cartes faceUp à l'Étape 3.1
+  interface PlannedCombatTarget {
+    playerIndex: number;
+    cellIndex: number;
+    cards: TacticType[];
+    assaultK: number;
+    passiveBonus: number;
+    dangerScore: number;
+    assignedTacticalDefenders: number;
+    desiredTacticalDefenders: number;
+  }
+
+  const combatMap = new Map<string, PlannedCombatTarget>();
+
+  for (const d of draws) {
+    const g = groups[d.targetPlayerIndex];
+    const m = getTargetMachineForTactic(g, d.tactic);
+    if (m.status === 'NORMAL' && m.position !== null) {
+      const cIdx = m.position + 1;
+      const key = `${d.targetPlayerIndex}:${cIdx}`;
+      let entry = combatMap.get(key);
+      if (!entry) {
+        const cell = g.cells[cIdx - 1];
+        const trapBonus = cell?.hasTrap ? 1 : 0;
+        entry = {
+          playerIndex: d.targetPlayerIndex,
+          cellIndex: cIdx,
+          cards: [],
+          assaultK: 0,
+          passiveBonus: trapBonus,
+          dangerScore: 0,
+          assignedTacticalDefenders: 0,
+          desiredTacticalDefenders: 0,
+        };
+        combatMap.set(key, entry);
+      }
+      entry.cards.push(d.tactic);
+    }
+  }
+
+  for (const entry of combatMap.values()) {
+    const g = groups[entry.playerIndex];
+    const hasA = entry.cards.some((c) => c.startsWith('A'));
+    const hasB = entry.cards.some((c) => c.startsWith('B'));
+    let sabBonus = 0;
+    if (hasA && g.harvester.hasSabotage) sabBonus += 1;
+    if (hasB && g.bulldozer.hasSabotage) sabBonus += 1;
+    entry.passiveBonus += sabBonus;
+    entry.assaultK = entry.cards.filter((c) => c === 'A3' || c === 'B3').length;
+
+    const hasExplosionA =
+      entry.cards.includes('A2') && entry.cards.includes('A3');
+    const hasExplosionB =
+      entry.cards.includes('B2') && entry.cards.includes('B3');
+    const overheatCount = entry.cards.filter(
+      (c) => c === 'A2' || c === 'B2'
+    ).length;
+
+    entry.dangerScore =
+      (hasExplosionA || hasExplosionB ? 100 : 0) +
+      overheatCount * 25 +
+      entry.cards.length * 15 -
+      entry.assaultK * 4;
+
+    // On vise prioritairement la Mise HS (S = 3 + k_assault), sinon la Parade (S = 2 + k_assault)
+    const neededForHS = Math.max(
+      0,
+      3 + entry.assaultK - entry.passiveBonus
+    );
+    const neededForParry = Math.max(
+      0,
+      2 + entry.assaultK - entry.passiveBonus
+    );
+    entry.desiredTacticalDefenders =
+      neededForHS <= 3 ? neededForHS : neededForParry;
+  }
+
+  const sortedTargets = Array.from(combatMap.values()).sort(
+    (a, b) => b.dangerScore - a.dangerScore
+  );
+
+  const step1Used = new Array(N).fill(false);
+  const step1Decisions: DefenderPlacementDecision[] = [];
+
+  // Étape 2.1 : Chaque joueur k aide d'abord une case attaquée sur sa propre piste k
+  for (let k = 0; k < N; k++) {
+    const ownTarget = sortedTargets.find(
+      (t) =>
+        t.playerIndex === k &&
+        t.assignedTacticalDefenders < t.desiredTacticalDefenders
+    );
+    if (ownTarget) {
+      ownTarget.assignedTacticalDefenders += 1;
+      step1Used[k] = true;
+      groups[k].cells[ownTarget.cellIndex - 1].tacticalDefenders += 1;
+      step1Decisions.push({
+        playerIndex: k,
+        step: 1,
+        targetPlayerIndex: k,
+        cellIndex: ownTarget.cellIndex,
+        track: 'TACTICAL',
+        reason: `[Omniscient] Défense Tactique exacte sur case attaquée c=${ownTarget.cellIndex}`,
+      });
+    }
+  }
+
+  // Pour les joueurs k qui n'ont pas d'attaque urgente sur leur propre piste à l'Étape 2.1 :
+  // Ils ouvrent une paire de Furtivité sur leur propre piste (qui sera complétée à l'Étape 2.2)
+  const openStealthCells: Array<{ playerIndex: number; cellIndex: number }> = [];
+  for (let k = 0; k < N; k++) {
+    if (step1Used[k]) continue;
+    const g = groups[k];
+    let targetCell = 2;
+    if (
+      g.harvester.status === 'HS' &&
+      g.harvester.position !== null &&
+      !g.harvester.hasSabotage
+    ) {
+      targetCell = g.harvester.position;
+    } else if (g.harvester.status === 'NORMAL' && g.harvester.position !== null) {
+      targetCell = g.harvester.position + 1;
+    } else if (g.bulldozer.status === 'NORMAL' && g.bulldozer.position !== null) {
+      targetCell = g.bulldozer.position + 1;
+    }
+    const safeCell = Math.max(1, Math.min(g.cells.length - 1, targetCell));
+    g.cells[safeCell - 1].stealthDefenders += 1;
+    openStealthCells.push({ playerIndex: k, cellIndex: safeCell });
+    step1Decisions.push({
+      playerIndex: k,
+      step: 1,
+      targetPlayerIndex: k,
+      cellIndex: safeCell,
+      track: 'STEALTH',
+      reason: `[Omniscient] Ouverture paire Furtivité (1/2) en c=${safeCell}`,
+    });
+  }
+
+  decisions.push(...step1Decisions);
+
+  // Étape 2.2 : Chaque joueur k pose son 2e jeton sur une piste P != k
+  for (let k = 0; k < N; k++) {
+    // 1. Compléter les seuils Tactiques des cibles attaquées chez P != k
+    const allyCombat = sortedTargets.find(
+      (t) =>
+        t.playerIndex !== k &&
+        t.assignedTacticalDefenders < t.desiredTacticalDefenders
+    );
+    if (allyCombat) {
+      allyCombat.assignedTacticalDefenders += 1;
+      groups[allyCombat.playerIndex].cells[
+        allyCombat.cellIndex - 1
+      ].tacticalDefenders += 1;
+      decisions.push({
+        playerIndex: k,
+        step: 2,
+        targetPlayerIndex: allyCombat.playerIndex,
+        cellIndex: allyCombat.cellIndex,
+        track: 'TACTICAL',
+        reason: `[Omniscient] Soutien Tactique exact sur J${allyCombat.playerIndex + 1} en c=${allyCombat.cellIndex}`,
+      });
+      continue;
+    }
+
+    // 2. Compléter une paire de Furtivité ouverte à l'Étape 2.1 chez P != k
+    const stealthIdx = openStealthCells.findIndex((s) => s.playerIndex !== k);
+    if (stealthIdx !== -1) {
+      const st = openStealthCells.splice(stealthIdx, 1)[0];
+      groups[st.playerIndex].cells[st.cellIndex - 1].stealthDefenders += 1;
+      decisions.push({
+        playerIndex: k,
+        step: 2,
+        targetPlayerIndex: st.playerIndex,
+        cellIndex: st.cellIndex,
+        track: 'STEALTH',
+        reason: `[Omniscient] Fermeture paire Furtivité (2/2) sur J${st.playerIndex + 1} en c=${st.cellIndex}`,
+      });
+      continue;
+    }
+
+    // 3. Repli : ajouter un défenseur Tactique sur une cible attaquée d'un allié pour viser S >= 3 + k_assault
+    const anyAllyCombat = sortedTargets.find((t) => t.playerIndex !== k);
+    const fallbackP = anyAllyCombat
+      ? anyAllyCombat.playerIndex
+      : k === 0
+      ? 1
+      : 0;
+    const fallbackCell = anyAllyCombat ? anyAllyCombat.cellIndex : 2;
+    groups[fallbackP].cells[fallbackCell - 1].tacticalDefenders += 1;
+    decisions.push({
+      playerIndex: k,
+      step: 2,
+      targetPlayerIndex: fallbackP,
+      cellIndex: fallbackCell,
+      track: 'TACTICAL',
+      reason: `[Omniscient] Renfort Tactique sur J${fallbackP + 1} en c=${fallbackCell}`,
+    });
+  }
+
+  return decisions;
 }

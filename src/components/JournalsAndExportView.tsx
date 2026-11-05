@@ -1,326 +1,416 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BotProfileId,
   CampaignRecord,
-  EditionPreset,
+  SimulationConfig,
   SingleGameResult,
-  ThemeVocabularyMode,
 } from '../sim/types';
 import {
   BOT_PROFILE_META,
-  DEFAULT_GAME_PARAMETERS,
-  DICTIONARIES,
-  SWITCH_KEYS,
-  SWITCH_META,
-  TACTIC_DESCRIPTIONS,
+  computeEvilEyeProbabilities,
+  DEFAULT_SIMULATION_CONFIG,
+  MASTER_MATRIX_6X6,
+  resolveTargetPlayerRank1Based,
+  TACTIC_META,
 } from '../sim/i18n';
-import {
-  downloadCampaignJson,
-  downloadCampaignMarkdown,
-  simulateSingleGameTrace,
-} from '../api';
-import { Copy, Download, FileText, Play } from 'lucide-react';
+import { simulateSingleGameTrace } from '../api';
 
 interface JournalsAndExportViewProps {
-  campaigns: CampaignRecord[];
-  editions: EditionPreset[];
-  selectedCampaign: CampaignRecord | null;
-  onSelectCampaign: (id: string) => void;
-  vocabulary: ThemeVocabularyMode;
-  onChangeVocabulary: (v: ThemeVocabularyMode) => void;
+  activeCampaign: CampaignRecord | null;
 }
 
 export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
-  campaigns,
-  editions,
-  selectedCampaign,
-  onSelectCampaign,
-  vocabulary,
-  onChangeVocabulary,
+  activeCampaign,
 }) => {
-  const [seed, setSeed] = useState<number>(104209);
-  const [selectedEditionId, setSelectedEditionId] = useState<string>(
-    editions[1]?.id || 'ed-v2-refonte'
-  );
-  const [botProfile, setBotProfile] = useState<BotProfileId>('COOPERATIVE');
-  const [singleResult, setSingleResult] = useState<SingleGameResult | null>(
-    null
-  );
-  const [runningSingle, setRunningSingle] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [seed, setSeed] = useState<number>(42001);
+  const [numPlayers, setNumPlayers] = useState<number>(4);
+  const [numTurns, setNumTurns] = useState<number>(8);
+  const [initialTrees, setInitialTrees] = useState<number>(3);
+  const [overheatBase, setOverheatBase] = useState<boolean>(false);
+  const [assaultBase, setAssaultBase] = useState<boolean>(false);
+  const [overheatStacks, setOverheatStacks] = useState<boolean>(true);
+  const [regenEnd, setRegenEnd] = useState<boolean>(true);
+  const [botProfile, setBotProfile] = useState<BotProfileId>('HYBRID_STEALTH_COMBAT');
 
-  const handleRunSingle = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setRunningSingle(true);
+  const [simResult, setSimResult] = useState<SingleGameResult | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [matrixPlayersPreview, setMatrixPlayersPreview] = useState<number>(4);
+
+  const runSimulation = async () => {
+    setLoading(true);
     try {
-      const ed =
-        editions.find((x) => x.id === selectedEditionId) || editions[0];
-      const params = {
-        ...DEFAULT_GAME_PARAMETERS,
-        ...(ed?.defaultParams || {}),
-        ...(ed?.switches || {}),
+      const params: SimulationConfig = {
+        ...DEFAULT_SIMULATION_CONFIG,
+        numPlayers,
+        numTurns,
+        initialTreesPerCell: initialTrees,
+        initialMachinesState: Array.from({ length: numPlayers }, () => ({
+          harvesterPos: 1,
+          harvesterStatus: 'NORMAL',
+          bulldozerPos: 1,
+          bulldozerStatus: 'NORMAL',
+          initialStumpsCell1: 0,
+        })),
+        overheatIncludesBaseAction: overheatBase,
+        assaultIncludesBaseAction: assaultBase,
+        overheatStacksTreeRemoval: overheatStacks,
+        endOfGameRegeneration: regenEnd,
       };
       const res = await simulateSingleGameTrace({
         seed,
         params,
         botProfiles: [botProfile],
-        vocabulary,
       });
-      setSingleResult(res);
+      setSimResult(res);
     } finally {
-      setRunningSingle(false);
+      setLoading(false);
     }
   };
 
-  const sampleJournalText =
-    singleResult?.textualJournal ||
-    selectedCampaign?.variantResults?.[0]?.sampleTraces?.[0]?.textualJournal ||
-    selectedCampaign?.stressTelemetry?.capturedExtremeLogs?.[0]
-      ?.textualJournal ||
-    'Lancez une simulation unitaire ci-dessus ou sélectionnez une campagne pour afficher un journal textuel complet.';
+  useEffect(() => {
+    void runSimulation();
+  }, []);
+
+  const eyeProbs = computeEvilEyeProbabilities(matrixPlayersPreview);
+  const min2D6Odds = [
+    { m: 1, cases: 11, pct: (11 / 36) * 100 },
+    { m: 2, cases: 9, pct: (9 / 36) * 100 },
+    { m: 3, cases: 7, pct: (7 / 36) * 100 },
+    { m: 4, cases: 5, pct: (5 / 36) * 100 },
+    { m: 5, cases: 3, pct: (3 / 36) * 100 },
+    { m: 6, cases: 1, pct: (1 / 36) * 100 },
+  ];
 
   return (
     <div className="space-y-6">
-      {/* Export IA & Générateur de Journal Textuel Unitaire */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
+      {/* SECTION 1 : SIMULATEUR UNITAIRE & COMBAT LOG COMPLET */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
           <div>
-            <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-              Journaux Textuels Pas-à-Pas, Export Prompt IA & Référentiel v2.0
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Simulez une partie sur la graine et l’Édition de votre choix ou téléchargez le bilan Markdown structuré prêt à être soumis à une IA.
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              1. Inspecteur de Partie Unitaire & Journal de Combat (« Combat Log »)
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Simulez une graine précise et inspectez chaque phase : lancers secrets 2D6, placements Défenseurs, calcul de S et k_assaut, explosions, pièges, sabotages et réparations.
             </p>
           </div>
 
-          {selectedCampaign && (
-            <div className="flex items-center gap-2 text-xs">
-              <select
-                value={selectedCampaign.id}
-                onChange={(e) => onSelectCampaign(e.target.value)}
-                className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-              >
-                {campaigns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.config.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => downloadCampaignMarkdown(selectedCampaign)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Télécharger Prompt IA (.md)
-              </button>
-              <button
-                type="button"
-                onClick={() => downloadCampaignJson(selectedCampaign)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded"
-              >
-                <Download className="w-3.5 h-3.5" />
-                JSON
-              </button>
-            </div>
-          )}
+          <button
+            onClick={() => void runSimulation()}
+            disabled={loading}
+            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded cursor-pointer"
+          >
+            {loading ? 'Simulation...' : 'Exécuter & Générer le Combat Log'}
+          </button>
         </div>
 
-        {/* Simulateur de partie unitaire */}
-        <form
-          onSubmit={handleRunSingle}
-          className="flex flex-wrap items-end gap-3 text-xs"
-        >
+        {/* Contrôles rapides de la partie unitaire */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mt-4">
           <div>
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
               Graine (Seed)
             </label>
             <input
               type="number"
               value={seed}
               onChange={(e) => setSeed(Number(e.target.value) || 1)}
-              className="w-32 px-2.5 py-1.5 font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             />
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Édition (Ensemble d’Interrupteurs)
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Joueurs ($N$)
             </label>
             <select
-              value={selectedEditionId}
-              onChange={(e) => setSelectedEditionId(e.target.value)}
-              className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              value={numPlayers}
+              onChange={(e) => setNumPlayers(Number(e.target.value))}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              {editions.map((ed) => (
-                <option key={ed.id} value={ed.id}>
-                  {ed.name}
+              {[3, 4, 5, 6].map((n) => (
+                <option key={n} value={n}>
+                  N = {n}
                 </option>
               ))}
             </select>
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Profil des Bots
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Tours ($X$)
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={numTurns}
+              onChange={(e) => setNumTurns(Math.max(1, Number(e.target.value) || 8))}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Arbres/Case ($a$)
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={6}
+              value={initialTrees}
+              onChange={(e) => setInitialTrees(Math.max(1, Number(e.target.value) || 3))}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Surchauffe A2/B2
+            </label>
+            <select
+              value={String(overheatBase)}
+              onChange={(e) => setOverheatBase(e.target.value === 'true')}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              <option value="false">D1 : Sans Base</option>
+              <option value="true">D2 : Avec Base</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Assaut A3/B3
+            </label>
+            <select
+              value={String(assaultBase)}
+              onChange={(e) => setAssaultBase(e.target.value === 'true')}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              <option value="false">D1 : Sans Base</option>
+              <option value="true">D2 : Avec Base</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Régénération Fin
+            </label>
+            <select
+              value={String(regenEnd)}
+              onChange={(e) => setRegenEnd(e.target.value === 'true')}
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              <option value="true">Oui (+1 arb.)</option>
+              <option value="false">Non</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Profil de Bot
             </label>
             <select
               value={botProfile}
               onChange={(e) => setBotProfile(e.target.value as BotProfileId)}
-              className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              {(Object.keys(BOT_PROFILE_META) as BotProfileId[]).map((b) => (
-                <option key={b} value={b}>
-                  {BOT_PROFILE_META[b].label}
-                </option>
-              ))}
+              {(['HYBRID_STEALTH_COMBAT', 'COMBAT_PURE', 'RANDOM', 'OMNISCIENT'] as const).map(
+                (b) => (
+                  <option key={b} value={b}>
+                    {BOT_PROFILE_META[b].shortLabel}
+                  </option>
+                )
+              )}
             </select>
           </div>
-
-          <button
-            type="submit"
-            disabled={runningSingle}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded"
-          >
-            <Play className="w-3.5 h-3.5" />
-            {runningSingle
-              ? 'Génération...'
-              : 'Générer le Journal Textuel Complet'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              navigator.clipboard.writeText(sampleJournalText);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 2000);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded hover:bg-slate-200"
-          >
-            <Copy className="w-3.5 h-3.5" />
-            {copied ? 'Copié !' : 'Copier le journal'}
-          </button>
-        </form>
-
-        {/* Affichage du Journal Textuel */}
-        <div className="relative">
-          <pre className="p-4 rounded-lg bg-slate-950 text-slate-100 font-mono text-xs overflow-x-auto max-h-[480px] leading-relaxed whitespace-pre-wrap">
-            {sampleJournalText}
-          </pre>
         </div>
+
+        {/* Résumé chiffré + Journal de Combat */}
+        {simResult && (
+          <div className="mt-5 space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs tabular-nums">
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Survie Horizon</div>
+                <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  {(simResult.survivalRateHorizon * 100).toFixed(1)} %
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Arbres Perdus</div>
+                <div className="text-sm font-bold font-mono text-rose-700 dark:text-rose-400">
+                  {simResult.totalTreesLost} / {simResult.referenceHorizonTrees}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Abattages</div>
+                <div className="text-sm font-bold font-mono">{simResult.cutsCount}</div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Terrassements</div>
+                <div className="text-sm font-bold font-mono">
+                  {simResult.clearingsCount} ({simResult.stumpsClearedCount} s.)
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Surchauffes / Assauts</div>
+                <div className="text-sm font-bold font-mono">
+                  {simResult.overheatTriggersCount} / {simResult.assaultTriggersCount}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Parades / Mises HS</div>
+                <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  {simResult.simpleParriesCount} / {simResult.parryAndHSCount}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Pièges / Sabotages</div>
+                <div className="text-sm font-bold font-mono">
+                  {simResult.trapsPlacedCount} / {simResult.sabotagesPlacedCount}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Explosions</div>
+                <div className="text-sm font-bold font-mono text-rose-700 dark:text-rose-400">
+                  {simResult.explosionsCount}
+                </div>
+              </div>
+            </div>
+
+            <pre className="p-4 rounded-lg bg-slate-950 text-slate-100 font-mono text-xs overflow-x-auto max-h-[520px] leading-relaxed border border-slate-800">
+              {simResult.textualJournal}
+            </pre>
+          </div>
+        )}
       </div>
 
-      {/* Référentiel des 6 Interrupteurs V1↔V2, 6 Tactiques et Dictionnaire Bilingue */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-emerald-600" />
-            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-              Référentiel des 6 Interrupteurs Mécaniques (Édition 1.0 ↔ Édition 2.0)
+      {/* SECTION 2 : MATRICE MAÎTRESSE 2D6 (6x6) & RÉFÉRENCE DES 6 TACTIQUES */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              2. Référence Formelle : Matrice Maîtresse 2D6 (6 × 6) & Piste des Tactiques
             </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Chaque cellule indique les 4 valeurs <code>[A] / [B] / [C] / [D]</code> correspondant à $N=3, 4, 5, 6$ joueurs, ainsi que la Tactique $M = \min(d_1, d_2)$.
+            </p>
           </div>
-          <div className="space-y-2.5 text-xs">
-            {SWITCH_KEYS.map((key) => {
-              const meta = SWITCH_META[key];
-              return (
-                <div
-                  key={key}
-                  className="p-3 rounded border border-slate-200 dark:border-slate-800 space-y-1"
-                >
-                  <div className="font-bold text-slate-900 dark:text-slate-100">
-                    {meta.title} ({meta.shortCode})
-                  </div>
-                  <div className="text-slate-600 dark:text-slate-400">
-                    <strong className="text-amber-700 dark:text-amber-400">
-                      {meta.v1Label} :
-                    </strong>{' '}
-                    {meta.v1HumanDesc}
-                  </div>
-                  <div className="text-slate-600 dark:text-slate-400">
-                    <strong className="text-emerald-700 dark:text-emerald-400">
-                      {meta.v2Label} :
-                    </strong>{' '}
-                    {meta.v2HumanDesc}
-                  </div>
-                </div>
-              );
-            })}
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+              Mettre en évidence pour :
+            </span>
+            {[3, 4, 5, 6].map((n) => (
+              <button
+                key={n}
+                onClick={() => setMatrixPlayersPreview(n)}
+                className={`px-2.5 py-1 text-xs font-mono font-semibold rounded border cursor-pointer ${
+                  matrixPlayersPreview === n
+                    ? 'bg-emerald-700 text-white border-emerald-700'
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                }`}
+              >
+                N={n} ([{n === 3 ? 'A' : n === 4 ? 'B' : n === 5 ? 'C' : 'D'}])
+              </button>
+            ))}
           </div>
         </div>
 
-        <div className="space-y-6">
-          {/* Les 6 Tactiques */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
-            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-              Les 6 Tuiles Tactiques du Contremaître (A1..B3)
-            </h2>
-            <div className="space-y-2 text-xs">
-              {Object.entries(TACTIC_DESCRIPTIONS).map(([id, t]) => (
+        <div className="overflow-x-auto mb-6">
+          <table className="w-full border-collapse text-xs font-mono">
+            <thead>
+              <tr className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                <th className="border border-slate-300 dark:border-slate-700 p-2 text-left">
+                  d1 (Majeur) \ d2 (Mineur)
+                </th>
+                {[1, 2, 3, 4, 5, 6].map((d2) => (
+                  <th
+                    key={d2}
+                    className="border border-slate-300 dark:border-slate-700 p-2 text-center"
+                  >
+                    Colonne d2 = {d2}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[1, 2, 3, 4, 5, 6].map((d1) => (
+                <tr key={d1}>
+                  <td className="border border-slate-300 dark:border-slate-700 p-2 font-bold bg-slate-50 dark:bg-slate-800/60">
+                    Ligne d1 = {d1}
+                  </td>
+                  {[1, 2, 3, 4, 5, 6].map((d2) => {
+                    const symbol = MASTER_MATRIX_6X6[d1 - 1][d2 - 1];
+                    const activePlayer = resolveTargetPlayerRank1Based(
+                      d1,
+                      d2,
+                      matrixPlayersPreview
+                    );
+                    const mVal = Math.min(d1, d2);
+                    return (
+                      <td
+                        key={d2}
+                        className="border border-slate-300 dark:border-slate-700 p-2 text-center"
+                      >
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Symbole Matrice : <strong>{symbol}</strong>
+                        </div>
+                        <div className="mt-1 font-bold text-emerald-700 dark:text-emerald-400">
+                          Cible J{activePlayer} · M={mVal}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Probabilités exactes */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              Distribution sur l'Œil du Malfaiteur pour N = {matrixPlayersPreview} joueurs
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 tabular-nums text-xs">
+              {eyeProbs.map((ep) => (
                 <div
-                  key={id}
-                  className="p-2.5 rounded bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800"
+                  key={ep.rank}
+                  className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                 >
                   <div className="font-bold text-slate-900 dark:text-slate-100">
-                    {t.name}
+                    Joueur J{ep.rank}
                   </div>
-                  <div className="text-slate-600 dark:text-slate-400 mt-0.5">
-                    {t.ruleSummary}
+                  <div className="font-mono text-emerald-700 dark:text-emerald-400">
+                    {ep.casesOn36} / 36 ({(ep.probability * 100).toFixed(2)} %)
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Dictionnaire Thématique i18n */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Table de Correspondance i18n (Amazonia ↔ Abstrait)
-              </h2>
-              <button
-                onClick={() =>
-                  onChangeVocabulary(
-                    vocabulary === 'AMAZONIA' ? 'ABSTRACT' : 'AMAZONIA'
-                  )
-                }
-                className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
-              >
-                Basculer ({vocabulary})
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
-                    <th className="py-1.5 px-2">Clé</th>
-                    <th className="py-1.5 px-2">Thème Amazonia</th>
-                    <th className="py-1.5 px-2">Notes Techniques</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                  {(
-                    Object.keys(DICTIONARIES.AMAZONIA) as Array<
-                      keyof typeof DICTIONARIES.AMAZONIA
-                    >
-                  ).map((k) => {
-                    const vAmz = DICTIONARIES.AMAZONIA[k];
-                    const vAbs = DICTIONARIES.ABSTRACT[k];
-                    return (
-                      <tr key={k}>
-                        <td className="py-1.5 px-2 font-mono text-[11px] text-slate-500">
-                          {k}
-                        </td>
-                        <td className="py-1.5 px-2 font-medium">
-                          {Array.isArray(vAmz) ? vAmz.join(', ') : vAmz}
-                        </td>
-                        <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400">
-                          {Array.isArray(vAbs) ? vAbs.join(', ') : vAbs}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+              Distribution de la Piste des Tactiques M = min(d1, d2)
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 tabular-nums text-xs">
+              {min2D6Odds.map((od) => {
+                const defaultTac = DEFAULT_SIMULATION_CONFIG.tacticsTrackSetup[od.m - 1];
+                return (
+                  <div
+                    key={od.m}
+                    className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                  >
+                    <div className="font-bold text-slate-900 dark:text-slate-100">
+                      Case M={od.m} ({defaultTac} — {TACTIC_META[defaultTac].name})
+                    </div>
+                    <div className="font-mono text-amber-700 dark:text-amber-400">
+                      {od.cases} / 36 ({od.pct.toFixed(2)} %)
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
