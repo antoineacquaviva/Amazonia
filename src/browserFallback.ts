@@ -2,7 +2,6 @@ import {
   BotProfileId,
   CampaignConfig,
   CampaignRecord,
-  InitialMachineConfig,
   SimulationConfig,
   SingleGameResult,
   TableConfig,
@@ -20,7 +19,7 @@ import {
 } from './sim/evaluator';
 import { SeededRNG } from './sim/rng';
 
-const LS_CAMPAIGNS_KEY = 'amazonia_v3_campaigns';
+const LS_CAMPAIGNS_KEY = 'amazonia_v31_campaigns';
 
 class BrowserCampaignManager {
   private campaigns: Map<string, CampaignRecord> = new Map();
@@ -48,9 +47,10 @@ class BrowserCampaignManager {
           if (c && c.id) {
             const isCompatible =
               c.config?.type === 'ORACLE_STRESS_TEST'
-                ? Boolean(c.stressTelemetry?.scoreDistributionByBotLevel?.COMBAT_PURE)
+                ? Boolean(c.stressTelemetry?.scoreDistributionByBotLevel?.COMBAT_PURE) &&
+                  Boolean(c.config?.sweep?.staggeredInitialSetupValues)
                 : c.variantResults.length === 0 ||
-                  Boolean(c.variantResults[0]?.optionDTag);
+                  Boolean(c.variantResults[0]?.leversCode);
             if (!isCompatible) continue;
 
             if (c.status === 'RUNNING') {
@@ -310,7 +310,7 @@ class BrowserCampaignManager {
             record.variantResults.push({
               variantId: vSpec.variantId,
               variantLabel: vSpec.variantLabel,
-              optionDTag: vSpec.optionDTag,
+              leversCode: vSpec.leversCode,
               params: vSpec.params,
               tableSummaries: variantTableSummaries,
               criteria,
@@ -403,24 +403,17 @@ class BrowserCampaignManager {
         let params: SimulationConfig;
         if (record.config.randomizeParametersInStress) {
           const n = paramRng.nextInt(3, 6);
-          const initMachines: InitialMachineConfig[] = Array.from({ length: n }, () => ({
-            harvesterPos: 1,
-            harvesterStatus: paramRng.nextFloat() < 0.8 ? 'NORMAL' : 'HS',
-            bulldozerPos: 1,
-            bulldozerStatus: paramRng.nextFloat() < 0.8 ? 'NORMAL' : 'HS',
-            initialStumpsCell1: paramRng.nextInt(0, 2),
-          }));
           params = {
             numPlayers: n,
             numTurns: paramRng.nextInt(6, 12),
-            initialTreesPerCell: paramRng.nextInt(2, 4),
+            initialTreesPerCell: paramRng.nextInt(2, 3),
             tacticsTrackSetup: ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
             shuffleTacticsTrack: paramRng.nextFloat() < 0.5,
-            initialMachinesState: initMachines,
-            overheatIncludesBaseAction: paramRng.nextFloat() < 0.5,
-            assaultIncludesBaseAction: paramRng.nextFloat() < 0.5,
-            overheatStacksTreeRemoval: paramRng.nextFloat() < 0.7,
-            endOfGameRegeneration: paramRng.nextFloat() < 0.7,
+            staggeredInitialSetup: paramRng.nextFloat() < 0.5,
+            limitStealthTokensToN: paramRng.nextFloat() < 0.5,
+            repairClearsSabotage: paramRng.nextFloat() < 0.5,
+            bulldozerOverflowAbattage: paramRng.nextFloat() < 0.5,
+            activeRepairOnMultiHit: paramRng.nextFloat() < 0.5,
           };
         } else {
           params = variants[gameIdx % variants.length].params;
@@ -488,14 +481,15 @@ class BrowserCampaignManager {
 
   private createInitialReferenceCampaign(): void {
     this.startCampaign({
-      id: 'camp_ref_d1_vs_d2',
-      name: 'Campagne de Référence — Comparaison Directe Options D1 vs D2 (Surchauffe × Assaut)',
-      type: 'D1_D2_COMPARISON',
+      id: 'camp_ref_v31_five_levers',
+      name: 'Campagne de Référence v3.1 — Étalonnage des 5 Leviers (Setup, MaxN, PurgeSab, BullOver, ActRep)',
+      type: 'FIVE_LEVERS_ABLATION',
       gamesPerVariantAndTable: 50,
       sweep: {
         ...DEFAULT_SWEEP_INPUT,
-        overheatIncludesBaseActionValues: [false, true],
-        assaultIncludesBaseActionValues: [false, true],
+        initialTreesPerCellValues: [2, 3],
+        staggeredInitialSetupValues: [false, true],
+        bulldozerOverflowAbattageValues: [false, true],
       },
       selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
       includeCalibrationTables: true,

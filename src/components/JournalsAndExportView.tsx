@@ -9,6 +9,7 @@ import {
   BOT_PROFILE_META,
   computeEvilEyeProbabilities,
   DEFAULT_SIMULATION_CONFIG,
+  FIVE_LEVERS_META,
   MASTER_MATRIX_6X6,
   resolveTargetPlayerRank1Based,
   TACTIC_META,
@@ -20,16 +21,17 @@ interface JournalsAndExportViewProps {
 }
 
 export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
-  activeCampaign,
+  activeCampaign: _activeCampaign,
 }) => {
   const [seed, setSeed] = useState<number>(42001);
   const [numPlayers, setNumPlayers] = useState<number>(4);
   const [numTurns, setNumTurns] = useState<number>(8);
-  const [initialTrees, setInitialTrees] = useState<number>(3);
-  const [overheatBase, setOverheatBase] = useState<boolean>(false);
-  const [assaultBase, setAssaultBase] = useState<boolean>(false);
-  const [overheatStacks, setOverheatStacks] = useState<boolean>(true);
-  const [regenEnd, setRegenEnd] = useState<boolean>(true);
+  const [initialTrees, setInitialTrees] = useState<number>(2);
+  const [staggeredSetup, setStaggeredSetup] = useState<boolean>(true);
+  const [limitStealthN, setLimitStealthN] = useState<boolean>(true);
+  const [repairClearsSab, setRepairClearsSab] = useState<boolean>(true);
+  const [bullOverflow, setBullOverflow] = useState<boolean>(true);
+  const [activeRepair31, setActiveRepair31] = useState<boolean>(true);
   const [botProfile, setBotProfile] = useState<BotProfileId>('HYBRID_STEALTH_COMBAT');
 
   const [simResult, setSimResult] = useState<SingleGameResult | null>(null);
@@ -44,17 +46,12 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
         numPlayers,
         numTurns,
         initialTreesPerCell: initialTrees,
-        initialMachinesState: Array.from({ length: numPlayers }, () => ({
-          harvesterPos: 1,
-          harvesterStatus: 'NORMAL',
-          bulldozerPos: 1,
-          bulldozerStatus: 'NORMAL',
-          initialStumpsCell1: 0,
-        })),
-        overheatIncludesBaseAction: overheatBase,
-        assaultIncludesBaseAction: assaultBase,
-        overheatStacksTreeRemoval: overheatStacks,
-        endOfGameRegeneration: regenEnd,
+        initialMachinesState: undefined,
+        staggeredInitialSetup: staggeredSetup,
+        limitStealthTokensToN: limitStealthN,
+        repairClearsSabotage: repairClearsSab,
+        bulldozerOverflowAbattage: bullOverflow,
+        activeRepairOnMultiHit: activeRepair31,
       };
       const res = await simulateSingleGameTrace({
         seed,
@@ -81,6 +78,17 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
     { m: 6, cases: 1, pct: (1 / 36) * 100 },
   ];
 
+  const leverValuesMap: Record<
+    (typeof FIVE_LEVERS_META)[number]['key'],
+    { val: boolean; setVal: (v: boolean) => void }
+  > = {
+    staggeredInitialSetup: { val: staggeredSetup, setVal: setStaggeredSetup },
+    limitStealthTokensToN: { val: limitStealthN, setVal: setLimitStealthN },
+    repairClearsSabotage: { val: repairClearsSab, setVal: setRepairClearsSab },
+    bulldozerOverflowAbattage: { val: bullOverflow, setVal: setBullOverflow },
+    activeRepairOnMultiHit: { val: activeRepair31, setVal: setActiveRepair31 },
+  };
+
   return (
     <div className="space-y-6">
       {/* SECTION 1 : SIMULATEUR UNITAIRE & COMBAT LOG COMPLET */}
@@ -88,10 +96,10 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              1. Inspecteur de Partie Unitaire & Journal de Combat (« Combat Log »)
+              1. Inspecteur de Partie Unitaire & Journal de Combat (« Combat Log » v3.1)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Simulez une graine précise et inspectez chaque phase : lancers secrets 2D6, placements Défenseurs, calcul de S et k_assaut, explosions, pièges, sabotages et réparations.
+              Simulez une graine précise avec les 5 nouveaux leviers d'équilibrage et inspectez chaque phase (2D6, Défenseurs, réparation active 3.1, BullOver, réserve MaxN et purge Sabotage).
             </p>
           </div>
 
@@ -105,7 +113,7 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
         </div>
 
         {/* Contrôles rapides de la partie unitaire */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mt-4">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-4">
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
               Graine (Seed)
@@ -120,7 +128,7 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Joueurs ($N$)
+              Joueurs (N)
             </label>
             <select
               value={numPlayers}
@@ -137,7 +145,7 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Tours ($X$)
+              Tours (X)
             </label>
             <input
               type="number"
@@ -151,57 +159,15 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Arbres/Case ($a$)
+              Arbres/Case (a)
             </label>
-            <input
-              type="number"
-              min={1}
-              max={6}
+            <select
               value={initialTrees}
-              onChange={(e) => setInitialTrees(Math.max(1, Number(e.target.value) || 3))}
+              onChange={(e) => setInitialTrees(Number(e.target.value) || 2)}
               className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Surchauffe A2/B2
-            </label>
-            <select
-              value={String(overheatBase)}
-              onChange={(e) => setOverheatBase(e.target.value === 'true')}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              <option value="false">D1 : Sans Base</option>
-              <option value="true">D2 : Avec Base</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Assaut A3/B3
-            </label>
-            <select
-              value={String(assaultBase)}
-              onChange={(e) => setAssaultBase(e.target.value === 'true')}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-            >
-              <option value="false">D1 : Sans Base</option>
-              <option value="true">D2 : Avec Base</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Régénération Fin
-            </label>
-            <select
-              value={String(regenEnd)}
-              onChange={(e) => setRegenEnd(e.target.value === 'true')}
-              className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-            >
-              <option value="true">Oui (+1 arb.)</option>
-              <option value="false">Non</option>
+              <option value={2}>a = 2 (Défaut)</option>
+              <option value={3}>a = 3</option>
             </select>
           </div>
 
@@ -225,6 +191,32 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
           </div>
         </div>
 
+        {/* Interrupteurs des 5 leviers */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 mt-3">
+          {FIVE_LEVERS_META.map((lv) => {
+            const state = leverValuesMap[lv.key];
+            return (
+              <label
+                key={lv.key}
+                className="flex items-center justify-between p-2.5 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 cursor-pointer text-xs"
+              >
+                <span className="font-medium text-slate-800 dark:text-slate-200">
+                  <strong className="font-mono text-emerald-700 dark:text-emerald-400">
+                    {lv.shortCode}
+                  </strong>{' '}
+                  · {lv.title.split('(')[0]}
+                </span>
+                <input
+                  type="checkbox"
+                  checked={state.val}
+                  onChange={(e) => state.setVal(e.target.checked)}
+                  className="rounded border-slate-300 ml-2"
+                />
+              </label>
+            );
+          })}
+        </div>
+
         {/* Résumé chiffré + Journal de Combat */}
         {simResult && (
           <div className="mt-5 space-y-4">
@@ -242,8 +234,10 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Abattages</div>
-                <div className="text-sm font-bold font-mono">{simResult.cutsCount}</div>
+                <div className="text-[11px] text-slate-500">Abattages (BullOver)</div>
+                <div className="text-sm font-bold font-mono">
+                  {simResult.cutsCount} ({simResult.bulldozerOverflowCutsCount})
+                </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <div className="text-[11px] text-slate-500">Terrassements</div>
@@ -270,9 +264,9 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Explosions</div>
-                <div className="text-sm font-bold font-mono text-rose-700 dark:text-rose-400">
-                  {simResult.explosionsCount}
+                <div className="text-[11px] text-slate-500">Réparations (Act. 3.1)</div>
+                <div className="text-sm font-bold font-mono text-sky-700 dark:text-sky-400">
+                  {simResult.repairsCount} ({simResult.activeRepairsStep31Count})
                 </div>
               </div>
             </div>
@@ -292,7 +286,7 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
               2. Référence Formelle : Matrice Maîtresse 2D6 (6 × 6) & Piste des Tactiques
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Chaque cellule indique les 4 valeurs <code>[A] / [B] / [C] / [D]</code> correspondant à $N=3, 4, 5, 6$ joueurs, ainsi que la Tactique $M = \min(d_1, d_2)$.
+              Chaque cellule indique les 4 valeurs <code>[A] / [B] / [C] / [D]</code> correspondant à N=3, 4, 5, 6 joueurs, ainsi que la Tactique M = min(d1, d2).
             </p>
           </div>
 

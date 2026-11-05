@@ -28,6 +28,27 @@ function getActiveMachines(group: PlayerForestGroup): MachineState[] {
 }
 
 /**
+ * Compte le nombre total de jetons Furtivité (Pièges + Sabotages) actuellement actifs sur le plateau
+ */
+export function countActiveStealthTokensOnBoard(
+  groups: PlayerForestGroup[]
+): number {
+  let total = 0;
+  for (const g of groups) {
+    if (g.harvester.status !== 'DESTROYED' && g.harvester.hasSabotage) {
+      total += 1;
+    }
+    if (g.bulldozer.status !== 'DESTROYED' && g.bulldozer.hasSabotage) {
+      total += 1;
+    }
+    for (const c of g.cells) {
+      if (c.hasTrap) total += 1;
+    }
+  }
+  return total;
+}
+
+/**
  * Calcule le bonus passif déjà présent sur une case c (Piège + Sabotage de la machine qui va y entrer)
  */
 function getExistingPassiveBonusForNextCell(
@@ -59,6 +80,13 @@ export function executePhase2Bots(
   if (botProfiles.every((b) => b === 'OMNISCIENT')) {
     return executeOmniscientTeamPhase2(config, groups, draws);
   }
+
+  const existingStealthTokens = countActiveStealthTokensOnBoard(groups);
+  const maxNewStealthTokensAllowed = config.limitStealthTokensToN
+    ? Math.max(0, N - existingStealthTokens)
+    : 999;
+  let initiatedStealthPairsStep1 = 0;
+  let completedStealthPairsStep2 = 0;
 
   // ==========================================================================
   // ÉTAPE 2.1 : Défense principale (chaque joueur k pose 1 jeton sur sa piste k)
@@ -110,12 +138,17 @@ export function executePhase2Bots(
         reason = `Couverture réactive de son Bulldozer NORMAL en c=${chosenCell}`;
       } else {
         chosenCell =
-          ownGroup.harvester.position || ownGroup.bulldozer.position || 1;
+          (ownGroup.harvester.position || ownGroup.bulldozer.position || 1) +
+          (config.activeRepairOnMultiHit ? 1 : 0);
         chosenTrack = 'TACTICAL';
         reason = 'Machines immobilisées/détruites -> Garde Tactique de repli';
       }
     } else {
       // HYBRID_STEALTH_COMBAT (ou OMNISCIENT individuel dans une table mixte)
+      const canUseStealth =
+        initiatedStealthPairsStep1 < maxNewStealthTokensAllowed;
+      const canSabotageHSMachine = !config.repairClearsSabotage;
+
       const drawnMachine = getTargetMachineForTactic(ownGroup, ownDraw.tactic);
       const selfTargetedNormal =
         ownDraw.targetPlayerIndex === k &&
@@ -127,7 +160,6 @@ export function executePhase2Bots(
         chosenTrack = 'TACTICAL';
         reason = `Menace personnelle directe (${ownDraw.tactic}) sur machine ${drawnMachine.type} -> Piste Tactique en c=${chosenCell}`;
       } else {
-        // Vérifier si une machine NORMAL a déjà un Piège en p+1 ou un Sabotage (opportunité de Parade/Mise HS facile)
         const harv = ownGroup.harvester;
         const bull = ownGroup.bulldozer;
         const harvBonus = getExistingPassiveBonusForNextCell(ownGroup, harv);
@@ -155,23 +187,29 @@ export function executePhase2Bots(
           chosenTrack = 'TACTICAL';
           reason = `Joueur J1 très exposé -> Couverture Tactique prioritaire en c=${chosenCell}`;
         } else if (
+          canUseStealth &&
+          canSabotageHSMachine &&
           harv.status === 'HS' &&
           harv.position !== null &&
           !harv.hasSabotage
         ) {
-          // Machine HS sur place : excellente cible pour poser un Sabotage en Furtivité
           chosenCell = harv.position;
           chosenTrack = 'STEALTH';
+          initiatedStealthPairsStep1 += 1;
           reason = `Initiative Furtivité (1/2) sur Abatteuse HS en c=${chosenCell} pour préparer un Sabotage`;
         } else if (
+          canUseStealth &&
+          canSabotageHSMachine &&
           bull.status === 'HS' &&
           bull.position !== null &&
           !bull.hasSabotage
         ) {
           chosenCell = bull.position;
           chosenTrack = 'STEALTH';
+          initiatedStealthPairsStep1 += 1;
           reason = `Initiative Furtivité (1/2) sur Bulldozer HS en c=${chosenCell} pour préparer un Sabotage`;
         } else if (
+          canUseStealth &&
           harv.status === 'NORMAL' &&
           harv.position !== null &&
           !ownGroup.cells[harv.position]?.hasTrap
@@ -179,19 +217,44 @@ export function executePhase2Bots(
           // Prépare un Piège ou Sabotage en p+1 via la Piste Furtivité
           chosenCell = harv.position + 1;
           chosenTrack = 'STEALTH';
+          initiatedStealthPairsStep1 += 1;
           reason = `Initiative Furtivité (1/2) en c=${chosenCell} (devant Abatteuse) pour poser Piège ou Sabotage`;
+        } else if (
+          canUseStealth &&
+          bull.status === 'NORMAL' &&
+          bull.position !== null &&
+          !ownGroup.cells[bull.position]?.hasTrap
+        ) {
+          chosenCell = bull.position + 1;
+          chosenTrack = 'STEALTH';
+          initiatedStealthPairsStep1 += 1;
+          reason = `Initiative Furtivité (1/2) en c=${chosenCell} (devant Bulldozer) pour poser Piège ou Sabotage`;
         } else if (harv.status === 'NORMAL' && harv.position !== null) {
           chosenCell = harv.position + 1;
           chosenTrack = 'TACTICAL';
-          reason = `Défense Tactique en c=${chosenCell}`;
+          reason = `Défense Tactique en c=${chosenCell}${!canUseStealth ? ' (Réserve Furtivité N atteinte)' : ''}`;
         } else if (bull.status === 'NORMAL' && bull.position !== null) {
           chosenCell = bull.position + 1;
           chosenTrack = 'TACTICAL';
-          reason = `Défense Tactique en c=${chosenCell}`;
+          reason = `Défense Tactique en c=${chosenCell}${!canUseStealth ? ' (Réserve Furtivité N atteinte)' : ''}`;
         } else {
-          chosenCell = 2;
-          chosenTrack = 'STEALTH';
-          reason = 'Préparation de Piège Furtivité en c=2';
+          // Si les deux machines sont HS/détruites : avec activeRepairOnMultiHit, couvrir p+1 en Tactique (ou poser un Piège devant une machine HS en p+1 si canUseStealth)
+          const hsPos = harv.position || bull.position || 1;
+          const nextCellAfterHS = hsPos + 1;
+          if (
+            canUseStealth &&
+            !ownGroup.cells[nextCellAfterHS - 1]?.hasTrap &&
+            ownGroup.cells[nextCellAfterHS - 1]
+          ) {
+            chosenCell = nextCellAfterHS;
+            chosenTrack = 'STEALTH';
+            initiatedStealthPairsStep1 += 1;
+            reason = `Préparation de Piège Furtivité (1/2) en c=${chosenCell} devant machine HS`;
+          } else {
+            chosenCell = nextCellAfterHS;
+            chosenTrack = 'TACTICAL';
+            reason = `Garde Tactique préventive en c=${chosenCell}`;
+          }
         }
       }
     }
@@ -256,7 +319,6 @@ export function executePhase2Bots(
         chosenTrack = 'TACTICAL';
         reason = `Alerte tirage (${ownDraw.tactic} -> J${targetP + 1}) : soutien Tactique en c=${chosenCell}`;
       } else {
-        // Chercher un allié (priorité J1) où un jeton Tactique permet d'atteindre S=2 ou S=3 sur p+1 d'une machine NORMAL
         let foundBest = false;
         for (let pIdx = 0; pIdx < N; pIdx++) {
           if (pIdx === k) continue;
@@ -295,12 +357,12 @@ export function executePhase2Bots(
       }
     } else {
       // HYBRID_STEALTH_COMBAT
+      const canCompleteStealth =
+        completedStealthPairsStep2 < maxNewStealthTokensAllowed;
       const drawnTargetP = ownDraw.targetPlayerIndex;
       const drawnGroup = groups[drawnTargetP];
       const drawnMachine = getTargetMachineForTactic(drawnGroup, ownDraw.tactic);
 
-      // 1. Si son propre dé attaque un allié (P_k != k) sur une machine NORMAL :
-      //    On vérifie s'il vaut mieux renforcer la Piste Tactique en p+1
       if (
         drawnTargetP !== k &&
         drawnMachine.status === 'NORMAL' &&
@@ -314,17 +376,16 @@ export function executePhase2Bots(
         const isAssault =
           ownDraw.tactic === 'A3' || ownDraw.tactic === 'B3' ? 1 : 0;
 
-        // Si on peut atteindre au moins la Parade (S >= 2 + isAssault) ou s'il y a déjà un défenseur
         if (currentS + 1 >= 2 + isAssault || currentS >= 1) {
           targetP = drawnTargetP;
           chosenCell = cIdx;
           chosenTrack = 'TACTICAL';
           reason = `Alerte tirage (${ownDraw.tactic} -> J${targetP + 1}) : complète la défense Tactique en c=${chosenCell} (S estimé=${currentS + 1})`;
-        } else if (cell && cell.stealthDefenders === 1) {
-          // Si l'allié avait ouvert une paire de Furtivité sur cette même case p+1, compléter la Furtivité pose un Sabotage !
+        } else if (canCompleteStealth && cell && cell.stealthDefenders === 1) {
           targetP = drawnTargetP;
           chosenCell = cIdx;
           chosenTrack = 'STEALTH';
+          completedStealthPairsStep2 += 1;
           reason = `Complète la paire Furtivité (2/2) en c=${chosenCell} chez J${targetP + 1} pour saboter la machine entrante`;
         } else {
           targetP = drawnTargetP;
@@ -333,22 +394,37 @@ export function executePhase2Bots(
           reason = `Alerte tirage (${ownDraw.tactic} -> J${targetP + 1}) : pose un Défenseur Tactique en c=${chosenCell}`;
         }
       } else {
-        // 2. Sinon, chercher en priorité une paire de Furtivité ouverte (stealthDefenders === 1) chez un allié
+        // 2. Sinon, chercher en priorité une paire de Furtivité ouverte (stealthDefenders === 1) chez un allié si la réserve le permet
         let completedStealthPair = false;
-        for (let pIdx = 0; pIdx < N; pIdx++) {
-          if (pIdx === k) continue;
-          const g = groups[pIdx];
-          for (const cell of g.cells) {
-            if (cell.stealthDefenders === 1) {
-              targetP = pIdx;
-              chosenCell = cell.cellIndex;
-              chosenTrack = 'STEALTH';
-              reason = `Coordination Furtivité (2/2) chez J${targetP + 1} en c=${chosenCell} -> Sabotage ou Piège garanti`;
-              completedStealthPair = true;
-              break;
+        if (canCompleteStealth) {
+          for (let pIdx = 0; pIdx < N; pIdx++) {
+            if (pIdx === k) continue;
+            const g = groups[pIdx];
+            for (const cell of g.cells) {
+              if (cell.stealthDefenders === 1) {
+                // Si repairClearsSabotage est actif, éviter de compléter un sabotage sur une case occupée uniquement par une machine HS
+                const hasOnlyHSMachineOnCell =
+                  config.repairClearsSabotage &&
+                  ((g.harvester.position === cell.cellIndex &&
+                    g.harvester.status === 'HS') ||
+                    (g.bulldozer.position === cell.cellIndex &&
+                      g.bulldozer.status === 'HS')) &&
+                  g.harvester.status !== 'NORMAL' &&
+                  g.bulldozer.status !== 'NORMAL';
+
+                if (!hasOnlyHSMachineOnCell) {
+                  targetP = pIdx;
+                  chosenCell = cell.cellIndex;
+                  chosenTrack = 'STEALTH';
+                  completedStealthPairsStep2 += 1;
+                  reason = `Coordination Furtivité (2/2) chez J${targetP + 1} en c=${chosenCell} -> Sabotage ou Piège garanti`;
+                  completedStealthPair = true;
+                  break;
+                }
+              }
             }
+            if (completedStealthPair) break;
           }
-          if (completedStealthPair) break;
         }
 
         // 3. À défaut de paire Furtivité ouverte, chercher une case Tactique alliée avec S=1 ou S=2 pour passer un palier (S=2 Parade ou S=3 Mise HS)
@@ -415,9 +491,7 @@ export function executePhase2Bots(
 }
 
 /**
- * Planificateur coopératif Omniscient (Borne Haute Théorique) :
- * Connaît tous les tirages (T_k, P_k) du tour et alloue les jetons Étape 2.1 (sur P=k) et Étape 2.2 (sur P!=k)
- * pour maximiser les Mises HS (S = 3 + k_assault) et Parades (S = 2 + k_assault), puis utilise les paires restantes en Furtivité.
+ * Planificateur coopératif Omniscient (Borne Haute Théorique)
  */
 function executeOmniscientTeamPhase2(
   config: SimulationConfig,
@@ -427,7 +501,11 @@ function executeOmniscientTeamPhase2(
   const N = config.numPlayers;
   const decisions: DefenderPlacementDecision[] = [];
 
-  // Simuler quelles cases vont recevoir des cartes faceUp à l'Étape 3.1
+  const existingStealthTokens = countActiveStealthTokensOnBoard(groups);
+  const maxNewStealthTokensAllowed = config.limitStealthTokensToN
+    ? Math.max(0, N - existingStealthTokens)
+    : 999;
+
   interface PlannedCombatTarget {
     playerIndex: number;
     cellIndex: number;
@@ -439,42 +517,69 @@ function executeOmniscientTeamPhase2(
     desiredTacticalDefenders: number;
   }
 
+  // Regrouper d'abord les tirages par machine pour anticiper activeRepairOnMultiHit
+  const drawsByMachine = new Map<string, TacticType[]>();
+  for (const d of draws) {
+    const mType = d.tactic.startsWith('A') ? 'A' : 'B';
+    const key = `${d.targetPlayerIndex}:${mType}`;
+    const arr = drawsByMachine.get(key) || [];
+    arr.push(d.tactic);
+    drawsByMachine.set(key, arr);
+  }
+
   const combatMap = new Map<string, PlannedCombatTarget>();
 
-  for (const d of draws) {
-    const g = groups[d.targetPlayerIndex];
-    const m = getTargetMachineForTactic(g, d.tactic);
-    if (m.status === 'NORMAL' && m.position !== null) {
-      const cIdx = m.position + 1;
-      const key = `${d.targetPlayerIndex}:${cIdx}`;
-      let entry = combatMap.get(key);
-      if (!entry) {
-        const cell = g.cells[cIdx - 1];
-        const trapBonus = cell?.hasTrap ? 1 : 0;
-        entry = {
-          playerIndex: d.targetPlayerIndex,
-          cellIndex: cIdx,
-          cards: [],
-          assaultK: 0,
-          passiveBonus: trapBonus,
-          dangerScore: 0,
-          assignedTacticalDefenders: 0,
-          desiredTacticalDefenders: 0,
-        };
-        combatMap.set(key, entry);
+  for (const [mKey, cards] of drawsByMachine.entries()) {
+    const [pStr, mType] = mKey.split(':');
+    const pIdx = Number(pStr);
+    const g = groups[pIdx];
+    const m = mType === 'A' ? g.harvester : g.bulldozer;
+
+    if (m.status === 'DESTROYED' || m.position === null) continue;
+
+    let activeCombatCards: TacticType[] = [];
+    let sabClearedOnActiveRepair = false;
+
+    if (m.status === 'NORMAL') {
+      activeCombatCards = cards;
+    } else if (
+      m.status === 'HS' &&
+      config.activeRepairOnMultiHit &&
+      cards.length >= 2
+    ) {
+      activeCombatCards = cards.slice(1);
+      if (config.repairClearsSabotage) {
+        sabClearedOnActiveRepair = true;
       }
-      entry.cards.push(d.tactic);
+    }
+
+    if (activeCombatCards.length === 0) continue;
+
+    const cIdx = m.position + 1;
+    const key = `${pIdx}:${cIdx}`;
+    let entry = combatMap.get(key);
+    if (!entry) {
+      const cell = g.cells[cIdx - 1];
+      const trapBonus = cell?.hasTrap ? 1 : 0;
+      entry = {
+        playerIndex: pIdx,
+        cellIndex: cIdx,
+        cards: [],
+        assaultK: 0,
+        passiveBonus: trapBonus,
+        dangerScore: 0,
+        assignedTacticalDefenders: 0,
+        desiredTacticalDefenders: 0,
+      };
+      combatMap.set(key, entry);
+    }
+    entry.cards.push(...activeCombatCards);
+    if (m.hasSabotage && !sabClearedOnActiveRepair) {
+      entry.passiveBonus += 1;
     }
   }
 
   for (const entry of combatMap.values()) {
-    const g = groups[entry.playerIndex];
-    const hasA = entry.cards.some((c) => c.startsWith('A'));
-    const hasB = entry.cards.some((c) => c.startsWith('B'));
-    let sabBonus = 0;
-    if (hasA && g.harvester.hasSabotage) sabBonus += 1;
-    if (hasB && g.bulldozer.hasSabotage) sabBonus += 1;
-    entry.passiveBonus += sabBonus;
     entry.assaultK = entry.cards.filter((c) => c === 'A3' || c === 'B3').length;
 
     const hasExplosionA =
@@ -491,7 +596,6 @@ function executeOmniscientTeamPhase2(
       entry.cards.length * 15 -
       entry.assaultK * 4;
 
-    // On vise prioritairement la Mise HS (S = 3 + k_assault), sinon la Parade (S = 2 + k_assault)
     const neededForHS = Math.max(
       0,
       3 + entry.assaultK - entry.passiveBonus
@@ -511,7 +615,6 @@ function executeOmniscientTeamPhase2(
   const step1Used = new Array(N).fill(false);
   const step1Decisions: DefenderPlacementDecision[] = [];
 
-  // Étape 2.1 : Chaque joueur k aide d'abord une case attaquée sur sa propre piste k
   for (let k = 0; k < N; k++) {
     const ownTarget = sortedTargets.find(
       (t) =>
@@ -533,42 +636,59 @@ function executeOmniscientTeamPhase2(
     }
   }
 
-  // Pour les joueurs k qui n'ont pas d'attaque urgente sur leur propre piste à l'Étape 2.1 :
-  // Ils ouvrent une paire de Furtivité sur leur propre piste (qui sera complétée à l'Étape 2.2)
   const openStealthCells: Array<{ playerIndex: number; cellIndex: number }> = [];
   for (let k = 0; k < N; k++) {
     if (step1Used[k]) continue;
     const g = groups[k];
-    let targetCell = 2;
-    if (
-      g.harvester.status === 'HS' &&
-      g.harvester.position !== null &&
-      !g.harvester.hasSabotage
-    ) {
-      targetCell = g.harvester.position;
-    } else if (g.harvester.status === 'NORMAL' && g.harvester.position !== null) {
-      targetCell = g.harvester.position + 1;
-    } else if (g.bulldozer.status === 'NORMAL' && g.bulldozer.position !== null) {
-      targetCell = g.bulldozer.position + 1;
+
+    if (openStealthCells.length < maxNewStealthTokensAllowed) {
+      let targetCell = 2;
+      if (
+        !config.repairClearsSabotage &&
+        g.harvester.status === 'HS' &&
+        g.harvester.position !== null &&
+        !g.harvester.hasSabotage
+      ) {
+        targetCell = g.harvester.position;
+      } else if (g.harvester.status === 'NORMAL' && g.harvester.position !== null) {
+        targetCell = g.harvester.position + 1;
+      } else if (g.bulldozer.status === 'NORMAL' && g.bulldozer.position !== null) {
+        targetCell = g.bulldozer.position + 1;
+      }
+      const safeCell = Math.max(1, Math.min(g.cells.length - 1, targetCell));
+      g.cells[safeCell - 1].stealthDefenders += 1;
+      openStealthCells.push({ playerIndex: k, cellIndex: safeCell });
+      step1Decisions.push({
+        playerIndex: k,
+        step: 1,
+        targetPlayerIndex: k,
+        cellIndex: safeCell,
+        track: 'STEALTH',
+        reason: `[Omniscient] Ouverture paire Furtivité (1/2) en c=${safeCell}`,
+      });
+    } else {
+      const fallbackCell = Math.max(
+        1,
+        Math.min(
+          g.cells.length - 1,
+          (g.harvester.position || g.bulldozer.position || 1) + 1
+        )
+      );
+      g.cells[fallbackCell - 1].tacticalDefenders += 1;
+      step1Decisions.push({
+        playerIndex: k,
+        step: 1,
+        targetPlayerIndex: k,
+        cellIndex: fallbackCell,
+        track: 'TACTICAL',
+        reason: `[Omniscient] Garde Tactique en c=${fallbackCell} (Réserve Furtivité N atteinte)`,
+      });
     }
-    const safeCell = Math.max(1, Math.min(g.cells.length - 1, targetCell));
-    g.cells[safeCell - 1].stealthDefenders += 1;
-    openStealthCells.push({ playerIndex: k, cellIndex: safeCell });
-    step1Decisions.push({
-      playerIndex: k,
-      step: 1,
-      targetPlayerIndex: k,
-      cellIndex: safeCell,
-      track: 'STEALTH',
-      reason: `[Omniscient] Ouverture paire Furtivité (1/2) en c=${safeCell}`,
-    });
   }
 
   decisions.push(...step1Decisions);
 
-  // Étape 2.2 : Chaque joueur k pose son 2e jeton sur une piste P != k
   for (let k = 0; k < N; k++) {
-    // 1. Compléter les seuils Tactiques des cibles attaquées chez P != k
     const allyCombat = sortedTargets.find(
       (t) =>
         t.playerIndex !== k &&
@@ -590,7 +710,6 @@ function executeOmniscientTeamPhase2(
       continue;
     }
 
-    // 2. Compléter une paire de Furtivité ouverte à l'Étape 2.1 chez P != k
     const stealthIdx = openStealthCells.findIndex((s) => s.playerIndex !== k);
     if (stealthIdx !== -1) {
       const st = openStealthCells.splice(stealthIdx, 1)[0];
@@ -606,7 +725,6 @@ function executeOmniscientTeamPhase2(
       continue;
     }
 
-    // 3. Repli : ajouter un défenseur Tactique sur une cible attaquée d'un allié pour viser S >= 3 + k_assault
     const anyAllyCombat = sortedTargets.find((t) => t.playerIndex !== k);
     const fallbackP = anyAllyCombat
       ? anyAllyCombat.playerIndex

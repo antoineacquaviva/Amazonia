@@ -6,7 +6,7 @@ import {
 } from '../sim/types';
 import {
   computeEvilEyeProbabilities,
-  OPTION_D_LABELS,
+  FIVE_LEVERS_META,
   VICTORY_BRACKET_LABELS,
 } from '../sim/i18n';
 import {
@@ -90,7 +90,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           Aucune campagne Monte-Carlo disponible
         </h2>
         <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
-          Configurez et lancez une campagne de simulation ou une comparaison directe des options D1 vs D2.
+          Configurez et lancez une campagne de simulation ou une ablation des 5 leviers d'équilibrage v3.1.
         </p>
         <button
           onClick={onNavigateToBuilder}
@@ -207,15 +207,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         )}
       </div>
 
-      {/* SECTION 1 : TABLEAU COMPARATIF DES VARIANTES & OPTIONS D1 vs D2 */}
+      {/* SECTION 1 : TABLEAU COMPARATIF DES VARIANTES & DES 5 LEVIERS */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              1. Comparaison Directe des Variantes & Arbitrages D1 vs D2 (Surchauffe × Assaut)
+              1. Classement des Variantes & État des 5 Leviers d'Équilibrage (Setup, MaxN, PurgeSab, BullOver, ActRep)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Cliquez sur une ligne pour inspecter ses distributions par tour (Tours 1..X), par joueur (J1..JN) et ses compteurs de combat/furtivité.
+              Options figées en dur : D2-Double (Surchauffe & Assaut incluent l'action de base), CumulA2=Oui, Régénération fin de partie=Oui. Cliquez sur une ligne pour l'inspecter.
             </p>
           </div>
           <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
@@ -228,11 +228,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
                 <th className="py-2.5 px-3">ID</th>
-                <th className="py-2.5 px-3">Configuration & Option D</th>
+                <th className="py-2.5 px-3">Variante & 5 Leviers</th>
                 <th className="py-2.5 px-3 text-right">Note Design</th>
                 <th className="py-2.5 px-3 text-right">Survie (Hybride)</th>
                 <th className="py-2.5 px-3 text-right">Arbres Perdus (Moy ± σ)</th>
-                <th className="py-2.5 px-3 text-right">Abattages</th>
+                <th className="py-2.5 px-3 text-right">Abattages (BullOver)</th>
                 <th className="py-2.5 px-3 text-right">Terrassements</th>
                 <th className="py-2.5 px-3 text-right">Surchauffes</th>
                 <th className="py-2.5 px-3 text-right">Assauts</th>
@@ -240,6 +240,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <th className="py-2.5 px-3 text-right">Mises HS S≥3+k</th>
                 <th className="py-2.5 px-3 text-right">Explosions</th>
                 <th className="py-2.5 px-3 text-right">Pièges + Sab.</th>
+                <th className="py-2.5 px-3 text-right">Réparations (Act. 3.1)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
@@ -251,7 +252,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   v.tableSummaries[0];
 
                 if (!mainTable) return null;
-                const dMeta = OPTION_D_LABELS[v.optionDTag];
 
                 return (
                   <tr
@@ -268,10 +268,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="font-semibold text-slate-900 dark:text-slate-100">
-                        {dMeta.title}
+                        N={v.params.numPlayers} · X={v.params.numTurns}t · a={v.params.initialTreesPerCell}
                       </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {v.variantLabel}
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {FIVE_LEVERS_META.map((lv) => {
+                          const enabled = v.params[lv.key];
+                          return (
+                            <span
+                              key={lv.key}
+                              className={`px-1.5 py-0.5 text-[10px] font-mono rounded border ${
+                                enabled
+                                  ? 'bg-emerald-100/70 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              {lv.shortCode}:{enabled ? 'Oui' : 'Non'}
+                            </span>
+                          );
+                        })}
                       </div>
                     </td>
                     <td className="py-2.5 px-3 text-right font-bold text-slate-900 dark:text-slate-100">
@@ -283,7 +297,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <td className="py-2.5 px-3 text-right text-slate-800 dark:text-slate-200">
                       {mainTable.meanTreesLostTotal.toFixed(2)} ± {mainTable.stdDevTreesLostTotal.toFixed(2)}
                     </td>
-                    <td className="py-2.5 px-3 text-right">{mainTable.meanCuts.toFixed(2)}</td>
+                    <td className="py-2.5 px-3 text-right">
+                      {mainTable.meanCuts.toFixed(2)}{' '}
+                      <span className="text-[11px] text-slate-400">
+                        ({(mainTable.meanBulldozerOverflowCuts ?? 0).toFixed(1)})
+                      </span>
+                    </td>
                     <td className="py-2.5 px-3 text-right">
                       {mainTable.meanClearings.toFixed(2)} ({mainTable.meanStumpsCleared.toFixed(1)} s.)
                     </td>
@@ -302,6 +321,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </td>
                     <td className="py-2.5 px-3 text-right">
                       {(mainTable.meanTrapsPlaced + mainTable.meanSabotagesPlaced).toFixed(2)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right">
+                      {mainTable.meanRepairs.toFixed(2)}{' '}
+                      <span className="text-[11px] text-slate-400">
+                        ({(mainTable.meanActiveRepairsStep31 ?? 0).toFixed(1)})
+                      </span>
                     </td>
                   </tr>
                 );
@@ -322,10 +347,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Inspection Détaillée — Variante {selectedVariant.variantId}
                 </div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                  {OPTION_D_LABELS[selectedVariant.optionDTag].title} — {selectedVariant.variantLabel}
+                  {selectedVariant.variantLabel}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  {OPTION_D_LABELS[selectedVariant.optionDTag].subtitle} · Horizon de référence :{' '}
+                  Options D2-Double & CumulA2 & Régénération actives · Horizon de référence :{' '}
                   <span className="font-mono font-semibold">
                     N×X×a = {selectedVariant.params.numPlayers * selectedVariant.params.numTurns * selectedVariant.params.initialTreesPerCell} arbres
                   </span>
@@ -412,7 +437,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          {/* GRILLE PRINCIPALE DES INDICATEURS STATISTIQUES (Section 7.3 de la Spécification) */}
+          {/* GRILLE PRINCIPALE DES INDICATEURS STATISTIQUES */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* A. Arbres perdus par Tour (t = 1..X) : Moyenne & Écart-type */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
@@ -534,19 +559,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {/* C. Fréquence moyenne des événements de Combat, Surchauffe, Assaut, Parade & Furtivité */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
             <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-              C. Fréquence Moyenne par Partie des Événements de Combat & de Furtivité (Spécification §7.3)
+              C. Fréquence Moyenne par Partie des Événements de Combat, Furtivité & Nouveaux Leviers v3.1
             </h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
               Mesures moyennes par partie sur {activeTableSummary.gamesCount} simulations ({activeTableSummary.tableConfigName}).
             </p>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 tabular-nums">
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Abattages (Arbre → Souche)
+                  Abattages Totaux (dont BullOver)
                 </div>
                 <div className="text-base font-bold font-mono text-slate-900 dark:text-slate-100 mt-0.5">
-                  {activeTableSummary.meanCuts.toFixed(2)}
+                  {activeTableSummary.meanCuts.toFixed(2)}{' '}
+                  <span className="text-xs font-normal text-emerald-700 dark:text-emerald-400">
+                    ({(activeTableSummary.meanBulldozerOverflowCuts ?? 0).toFixed(2)})
+                  </span>
                 </div>
               </div>
 
@@ -612,46 +640,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Pièges Posés (Furtivité ≥ 2)
+                  Pièges & Sabotages (Bloqués MaxN)
                 </div>
                 <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
-                  {activeTableSummary.meanTrapsPlaced.toFixed(2)}
+                  {(activeTableSummary.meanTrapsPlaced + activeTableSummary.meanSabotagesPlaced).toFixed(2)}{' '}
+                  <span className="text-xs font-normal text-amber-600 dark:text-amber-400">
+                    ({(activeTableSummary.meanStealthBlockedByLimit ?? 0).toFixed(2)} bloq.)
+                  </span>
                 </div>
               </div>
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Sabotages Posés (Furtivité ≥ 2)
-                </div>
-                <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
-                  {activeTableSummary.meanSabotagesPlaced.toFixed(2)}
-                </div>
-              </div>
-
-              <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
-                <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Réparations (Étape 3.4)
+                  Réparations Totales (dont ActRep 3.1)
                 </div>
                 <div className="text-base font-bold font-mono text-slate-900 dark:text-slate-100 mt-0.5">
-                  {activeTableSummary.meanRepairs.toFixed(2)}
+                  {activeTableSummary.meanRepairs.toFixed(2)}{' '}
+                  <span className="text-xs font-normal text-emerald-700 dark:text-emerald-400">
+                    ({(activeTableSummary.meanActiveRepairsStep31 ?? 0).toFixed(2)} en 3.1)
+                  </span>
                 </div>
               </div>
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Répits (Tirages sur Machine Détruite)
+                  Sabotages Purgés par Réparation
                 </div>
-                <div className="text-base font-bold font-mono text-slate-900 dark:text-slate-100 mt-0.5">
-                  {activeTableSummary.meanRespiteDraws.toFixed(2)}
-                </div>
-              </div>
-
-              <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
-                <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Violations d'Invariants (I1..I4)
-                </div>
-                <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
-                  {selectedVariant.invariantViolationsCount}
+                <div className="text-base font-bold font-mono text-sky-700 dark:text-sky-400 mt-0.5">
+                  {(activeTableSummary.meanSabotageClearedByRepair ?? 0).toFixed(2)}
                 </div>
               </div>
             </div>

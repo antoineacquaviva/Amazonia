@@ -10,24 +10,27 @@ export type BotProfileId =
   | 'OMNISCIENT';            // Bot « Omniscient » (Borne Haute Théorique)
 
 export interface InitialMachineConfig {
-  harvesterPos: number;           // Case initiale Abatteuse (>= 1), défaut 1
+  harvesterPos: number;           // Case initiale Abatteuse (>= 1)
   harvesterStatus: 'NORMAL' | 'HS';
-  bulldozerPos: number;           // Case initiale Bulldozer (>= 1), défaut 1
+  bulldozerPos: number;           // Case initiale Bulldozer (>= 1)
   bulldozerStatus: 'NORMAL' | 'HS';
-  initialStumpsCell1: number;     // Souches initiales en case 1 (>= 0), défaut 0
+  initialStumpsCell1: number;     // Souches initiales en case 1 (>= 0)
 }
 
 export interface SimulationConfig {
   numPlayers: number;                    // N in {3, 4, 5, 6}, défaut 4
   numTurns: number;                      // X >= 1, défaut 8
-  initialTreesPerCell: number;           // a >= 1, défaut 3
+  initialTreesPerCell: number;           // a in {2, 3}, défaut 2
   tacticsTrackSetup: TacticType[];       // Longueur 6, défaut ['A1','B1','A2','B2','A3','B3']
   shuffleTacticsTrack: boolean;          // Si true, mélange tacticsTrackSetup en début de partie
-  initialMachinesState: InitialMachineConfig[]; // Taille N
-  overheatIncludesBaseAction: boolean;   // Variable D (Surchauffe A2/B2) : false = D1, true = D2
-  assaultIncludesBaseAction: boolean;    // Variable D (Assaut A3/B3) : false = D1, true = D2
-  overheatStacksTreeRemoval: boolean;    // Si k>=2 Surchauffes sans Assaut : true = enlève k arbres, false = 1
-  endOfGameRegeneration: boolean;        // Fin de partie : 1 souche -> 1 arbre debout sur chaque case ayant >= 1 souche
+  initialMachinesState?: InitialMachineConfig[]; // Taille N (optionnel : utilisé si personnalisé)
+
+  // 5 Nouvelles Variables d'Équilibrage (v3.1)
+  staggeredInitialSetup: boolean;        // 1. Décalage initial (A en case 2, B en case 1, 1 souche + a-1 arbres en cases 1 et 2), défaut true
+  limitStealthTokensToN: boolean;        // 2. Réserve globale limitée à N jetons Furtivité (Pièges + Sabotages <= N), défaut true
+  repairClearsSabotage: boolean;         // 3. Sabotage éphémère retiré dès qu'une machine HS est réparée, défaut true
+  bulldozerOverflowAbattage: boolean;    // 4. Débordement Bulldozer : si 0 souche lors du Terrassement -> 1 Abattage, défaut true
+  activeRepairOnMultiHit: boolean;       // 5. Réparation active immédiate à l'Étape 3.1 si une machine HS reçoit >= 2 cartes, défaut true
 }
 
 export type GameParameters = SimulationConfig;
@@ -40,7 +43,7 @@ export interface ForestCellState {
   tacticalDefenders: number;      // Jetons Défenseurs posés sur la Piste Tactique ce tour-ci
   stealthDefenders: number;       // Jetons Défenseurs posés sur la Piste Furtivité ce tour-ci
   faceUpCards: TacticType[];      // Cartes posées face visible ce tour-ci (génèrent un combat)
-  faceDownCards: TacticType[];    // Cartes posées face cachée ce tour-ci (génèrent une réparation)
+  faceDownCards: TacticType[];    // Cartes posées face cachée ce tour-ci (génèrent une réparation en 3.4)
   explodedHereThisTurn: boolean;  // Machine entrée et explosée sur cette case ce tour-ci
 }
 
@@ -93,6 +96,7 @@ export interface CombatCellLog {
   harvesterExploded: boolean;
   bulldozerExploded: boolean;
   treesCutToStumps: number;       // Abattages (Arbre debout -> Souche)
+  bulldozerOverflowAbattageTriggered?: boolean;
   stumpsCleared: number;          // Terrassements (Souches retirées)
   treesRemovedByOverheat: number; // Pions retirés directement par Surchauffe A2/B2
   treesDestroyedByExplosion: number; // Pions détruits par Explosion
@@ -104,7 +108,11 @@ export interface StealthCellLog {
   playerIndex: number;
   cellIndex: number;
   stealthDefenders: number;
-  outcome: 'SABOTAGE_PLACED' | 'TRAP_PLACED' | 'FAILED_VACATED_OR_EXPLODED';
+  outcome:
+    | 'SABOTAGE_PLACED'
+    | 'TRAP_PLACED'
+    | 'FAILED_VACATED_OR_EXPLODED'
+    | 'FAILED_TOKEN_LIMIT_REACHED';
   sabotagedMachines: MachineType[];
 }
 
@@ -114,6 +122,8 @@ export interface RepairCellLog {
   faceDownCards: TacticType[];
   harvesterRepaired: boolean;
   bulldozerRepaired: boolean;
+  harvesterSabotageCleared?: boolean;
+  bulldozerSabotageCleared?: boolean;
 }
 
 export interface TurnTrace {
@@ -129,6 +139,8 @@ export interface TurnTrace {
     placedCell: number | null;
     faceUp: boolean;
     ignoredBecauseDestroyed: boolean;
+    repairedImmediatelyInStep31?: boolean;
+    sabotageClearedInStep31?: boolean;
   }>;
   machineMoves: Array<{
     playerIndex: number;
@@ -180,7 +192,7 @@ export interface SingleGameResult {
   initialTotalTreesAllocated: number;
   referenceHorizonTrees: number;        // N * X * a (horizon de référence de la spécification)
   finalStandingTreesTotal: number;
-  totalTreesLost: number;               // Arbres perdus sur toute la partie (après régénération éventuelle)
+  totalTreesLost: number;               // Arbres perdus sur toute la partie (après régénération)
   survivalRateHorizon: number;          // Ratio de survie sur l'horizon N * X * a (borné dans [0, 1])
   survivalRateVisited: number;          // Ratio de survie sur les cases visitées (1 .. maxPos+1)
   regeneratedTreesCount: number;
@@ -191,8 +203,9 @@ export interface SingleGameResult {
   treesLostPerPlayer: number[];
   survivingTreesPerPlayerOnHorizon: number[];
 
-  // Compteurs d'événements de la partie (Section 7.3)
+  // Compteurs d'événements de la partie
   cutsCount: number;                    // Nombre d'arbres abattus (Arbre -> Souche)
+  bulldozerOverflowCutsCount: number;   // Dont abattages par débordement Bulldozer (0 souche)
   clearingsCount: number;               // Nombre d'actions de Terrassement exécutées
   stumpsClearedCount: number;           // Nombre total de souches rasées
   overheatTriggersCount: number;        // Nombre de Surchauffes (A2/B2) subies en combat
@@ -203,9 +216,12 @@ export interface SingleGameResult {
   explosionsCount: number;              // Nombre d'Explosions (A2+A3 ou B2+B3)
   trapsPlacedCount: number;             // Nombre de Pièges posés en Furtivité
   sabotagesPlacedCount: number;         // Nombre de Sabotages posés en Furtivité
+  stealthBlockedByLimitCount: number;   // Furtivités bloquées par la limite de N jetons
   stealthFailuresCount: number;         // Nombre d'échecs de Furtivité (>=2 jetons sur case quittée/explosée)
-  repairsCount: number;                 // Nombre de réparations réussies en Étape 3.4
-  respiteDrawsOnDestroyedCount: number; // Nombre de tirages sans effet sur machine détruite (Arbitrage C1)
+  repairsCount: number;                 // Nombre total de réparations (Étape 3.1 + Étape 3.4)
+  activeRepairsStep31Count: number;     // Dont réparations actives immédiates à l'Étape 3.1 (m >= 2)
+  sabotageClearedByRepairCount: number; // Sabotages purgés lors d'une réparation
+  respiteDrawsOnDestroyedCount: number; // Nombre de tirages sans effet sur machine détruite
   tacticalDefendersPlaced: number;
   stealthDefendersPlaced: number;
 
@@ -237,8 +253,9 @@ export interface TableConfigSummary {
   stdDevTreesLostPerPlayer: number[];   // Écart-type par joueur (J1..JN)
   victoryBracketsRate: Record<VictoryBracket, number>;
 
-  // Moyennes par partie des événements (Section 7.3)
+  // Moyennes par partie des événements
   meanCuts: number;
+  meanBulldozerOverflowCuts: number;
   meanClearings: number;
   meanStumpsCleared: number;
   meanOverheats: number;
@@ -249,7 +266,10 @@ export interface TableConfigSummary {
   meanExplosions: number;
   meanTrapsPlaced: number;
   meanSabotagesPlaced: number;
+  meanStealthBlockedByLimit: number;
   meanRepairs: number;
+  meanActiveRepairsStep31: number;
+  meanSabotageClearedByRepair: number;
   meanRespiteDraws: number;
 }
 
@@ -295,7 +315,7 @@ export interface FourCriteriaEvaluation {
 export interface VariantEvaluationResult {
   variantId: string;
   variantLabel: string;
-  optionDTag: 'D1_NONE' | 'D2_OVERHEAT_ONLY' | 'D2_ASSAULT_ONLY' | 'D2_BOTH';
+  leversCode: string; // ex: "Setup:Oui | MaxN:Oui | PurgeSab:Oui | BullOver:Oui | ActRep:Oui"
   params: SimulationConfig;
   tableSummaries: TableConfigSummary[];
   criteria: FourCriteriaEvaluation;
@@ -314,13 +334,18 @@ export interface VariantEvaluationResult {
 export interface ParameterSweepInput {
   numPlayersValues: number[];
   numTurnsValues: number[];
-  initialTreesPerCellValues: number[];
-  overheatIncludesBaseActionValues: boolean[];
-  assaultIncludesBaseActionValues: boolean[];
-  overheatStacksTreeRemovalValues: boolean[];
-  endOfGameRegenerationValues: boolean[];
+  initialTreesPerCellValues: number[]; // limité à [2, 3], défaut [2]
   shuffleTacticsTrackValues: boolean[];
   tacticsTrackSetup: TacticType[];
+
+  // Les 5 nouvelles variables d'équilibrage dans le Sweep Monte-Carlo
+  staggeredInitialSetupValues: boolean[];
+  limitStealthTokensToNValues: boolean[];
+  repairClearsSabotageValues: boolean[];
+  bulldozerOverflowAbattageValues: boolean[];
+  activeRepairOnMultiHitValues: boolean[];
+
+  // Paramètres utilisés uniquement si staggeredInitialSetup == false
   initialHarvesterStatus: 'NORMAL' | 'HS';
   initialBulldozerStatus: 'NORMAL' | 'HS';
   initialStumpsCell1: number;
@@ -329,7 +354,7 @@ export interface ParameterSweepInput {
 export interface CampaignConfig {
   id: string;
   name: string;
-  type: 'MONTE_CARLO_SWEEP' | 'D1_D2_COMPARISON' | 'ORACLE_STRESS_TEST';
+  type: 'MONTE_CARLO_SWEEP' | 'FIVE_LEVERS_ABLATION' | 'ORACLE_STRESS_TEST';
   createdAt: string;
   gamesPerVariantAndTable: number;
   sweep: ParameterSweepInput;

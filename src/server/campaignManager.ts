@@ -6,7 +6,6 @@ import {
   BotProfileId,
   CampaignConfig,
   CampaignRecord,
-  InitialMachineConfig,
   SimulationConfig,
   SingleGameResult,
   TableConfig,
@@ -334,12 +333,13 @@ export class CampaignManager {
         const raw = fs.readFileSync(fullPath, 'utf-8');
         const record = JSON.parse(raw) as CampaignRecord;
 
-        // Vérifie la compatibilité avec le nouveau modèle (présence de optionDTag ou scoreDistributionByBotLevel.COMBAT_PURE)
+        // Vérifie la compatibilité avec le modèle v3.1 (présence de leversCode)
         const isCompatible =
           record.config?.type === 'ORACLE_STRESS_TEST'
-            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.COMBAT_PURE)
+            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.COMBAT_PURE) &&
+              Boolean(record.config?.sweep?.staggeredInitialSetupValues)
             : record.variantResults.length === 0 ||
-              Boolean(record.variantResults[0]?.optionDTag);
+              Boolean(record.variantResults[0]?.leversCode);
 
         if (!isCompatible) {
           fs.unlinkSync(fullPath);
@@ -449,7 +449,7 @@ export class CampaignManager {
 
     const tablesToUse = this.resolveTablesForCampaign(config);
     let totalTargetGames = 0;
-    if (config.type === 'MONTE_CARLO_SWEEP' || config.type === 'D1_D2_COMPARISON') {
+    if (config.type === 'MONTE_CARLO_SWEEP' || config.type === 'FIVE_LEVERS_ABLATION') {
       totalTargetGames =
         totalVariants * Math.max(1, tablesToUse.length) * config.gamesPerVariantAndTable;
     } else {
@@ -499,7 +499,7 @@ export class CampaignManager {
     this.campaigns.set(record.id, record);
     void this.saveToDiskAsync(record);
 
-    if (config.type === 'MONTE_CARLO_SWEEP' || config.type === 'D1_D2_COMPARISON') {
+    if (config.type === 'MONTE_CARLO_SWEEP' || config.type === 'FIVE_LEVERS_ABLATION') {
       void this.runEvaluationSweepLoop(record, variants, tablesToUse);
     } else {
       void this.runStressTestLoop(record);
@@ -525,7 +525,7 @@ export class CampaignManager {
   }
 
   // ============================================================================
-  // EXÉCUTION MULTI-CŒURS : BALAYAGE MONTE-CARLO & COMPARAISON D1 / D2
+  // EXÉCUTION MULTI-CŒURS : BALAYAGE MONTE-CARLO & ABLATION DES 5 LEVIERS
   // ============================================================================
   private async runEvaluationSweepLoop(
     record: CampaignRecord,
@@ -632,7 +632,7 @@ export class CampaignManager {
       record.variantResults.push({
         variantId: vSpec.variantId,
         variantLabel: vSpec.variantLabel,
-        optionDTag: vSpec.optionDTag,
+        leversCode: vSpec.leversCode,
         params: vSpec.params,
         tableSummaries: variantTableSummaries,
         criteria,
@@ -733,24 +733,17 @@ export class CampaignManager {
 
           if (record.config.randomizeParametersInStress) {
             const n = paramRng.nextInt(3, 6);
-            const initMachines: InitialMachineConfig[] = Array.from({ length: n }, () => ({
-              harvesterPos: 1,
-              harvesterStatus: paramRng.nextFloat() < 0.8 ? 'NORMAL' : 'HS',
-              bulldozerPos: 1,
-              bulldozerStatus: paramRng.nextFloat() < 0.8 ? 'NORMAL' : 'HS',
-              initialStumpsCell1: paramRng.nextInt(0, 2),
-            }));
             params = {
               numPlayers: n,
               numTurns: paramRng.nextInt(6, 12),
-              initialTreesPerCell: paramRng.nextInt(2, 4),
+              initialTreesPerCell: paramRng.nextInt(2, 3),
               tacticsTrackSetup: ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
               shuffleTacticsTrack: paramRng.nextFloat() < 0.5,
-              initialMachinesState: initMachines,
-              overheatIncludesBaseAction: paramRng.nextFloat() < 0.5,
-              assaultIncludesBaseAction: paramRng.nextFloat() < 0.5,
-              overheatStacksTreeRemoval: paramRng.nextFloat() < 0.7,
-              endOfGameRegeneration: paramRng.nextFloat() < 0.7,
+              staggeredInitialSetup: paramRng.nextFloat() < 0.5,
+              limitStealthTokensToN: paramRng.nextFloat() < 0.5,
+              repairClearsSabotage: paramRng.nextFloat() < 0.5,
+              bulldozerOverflowAbattage: paramRng.nextFloat() < 0.5,
+              activeRepairOnMultiHit: paramRng.nextFloat() < 0.5,
             };
           } else {
             params = variants[gameIdx % variants.length].params;
@@ -860,20 +853,21 @@ export class CampaignManager {
   }
 
   /**
-   * Génère au premier lancement une campagne de référence comparant les 4 options D1 / D2
-   * (overheatIncludesBaseAction × assaultIncludesBaseAction) sur graines appariées.
+   * Génère au premier lancement une campagne de référence v3.1 comparant
+   * a ∈ {2, 3} et l'impact des nouveaux leviers d'équilibrage sur graines appariées.
    */
   private createInitialReferenceCampaign(): void {
     const config: CampaignConfig = {
-      id: 'camp_ref_d1_vs_d2',
-      name: 'Campagne de Référence — Comparaison Directe Options D1 vs D2 (Surchauffe × Assaut)',
-      type: 'D1_D2_COMPARISON',
+      id: 'camp_ref_v31_five_levers',
+      name: 'Campagne de Référence v3.1 — Étalonnage des 5 Leviers (Setup, MaxN, PurgeSab, BullOver, ActRep)',
+      type: 'FIVE_LEVERS_ABLATION',
       createdAt: new Date().toISOString(),
-      gamesPerVariantAndTable: 150,
+      gamesPerVariantAndTable: 120,
       sweep: {
         ...DEFAULT_SWEEP_INPUT,
-        overheatIncludesBaseActionValues: [false, true],
-        assaultIncludesBaseActionValues: [false, true],
+        initialTreesPerCellValues: [2, 3],
+        staggeredInitialSetupValues: [false, true],
+        bulldozerOverflowAbattageValues: [false, true],
       },
       selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
       includeCalibrationTables: true,
@@ -918,7 +912,7 @@ export class CampaignManager {
       variantResults.push({
         variantId: vSpec.variantId,
         variantLabel: vSpec.variantLabel,
-        optionDTag: vSpec.optionDTag,
+        leversCode: vSpec.leversCode,
         params: vSpec.params,
         tableSummaries: summaries,
         criteria,
@@ -944,7 +938,7 @@ export class CampaignManager {
         totalVariants: variants.length,
         elapsedSeconds: elapsedSec,
         gamesPerSecond: completedGames / elapsedSec,
-        currentPhaseLabel: `Campagne de référence prête (${variants.length} variantes D1/D2 × 4 profils de Bots)`,
+        currentPhaseLabel: `Campagne de référence v3.1 prête (${variants.length} variantes × 4 profils de Bots)`,
       },
       variantResults,
     };

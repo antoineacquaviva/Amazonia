@@ -10,7 +10,6 @@ import {
   VariantEvaluationResult,
   VictoryBracket,
 } from './types';
-import { OPTION_D_LABELS } from './i18n';
 
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
@@ -28,115 +27,112 @@ function stdDev(arr: number[], m?: number): number {
   return Math.sqrt(variance);
 }
 
-export function resolveOptionDTag(
-  overheatBase: boolean,
-  assaultBase: boolean
-): VariantEvaluationResult['optionDTag'] {
-  if (!overheatBase && !assaultBase) return 'D1_NONE';
-  if (overheatBase && !assaultBase) return 'D2_OVERHEAT_ONLY';
-  if (!overheatBase && assaultBase) return 'D2_ASSAULT_ONLY';
-  return 'D2_BOTH';
+export function buildLeversCode(params: SimulationConfig): string {
+  return `Setup:${params.staggeredInitialSetup ? 'Oui' : 'Non'} · MaxN:${
+    params.limitStealthTokensToN ? 'Oui' : 'Non'
+  } · PurgeSab:${params.repairClearsSabotage ? 'Oui' : 'Non'} · BullOver:${
+    params.bulldozerOverflowAbattage ? 'Oui' : 'Non'
+  } · ActRep:${params.activeRepairOnMultiHit ? 'Oui' : 'Non'}`;
 }
 
 export function buildVariantLabel(params: SimulationConfig): string {
-  const dTag = resolveOptionDTag(
-    params.overheatIncludesBaseAction,
-    params.assaultIncludesBaseAction
-  );
-  const dShort =
-    dTag === 'D1_NONE'
-      ? 'D1 (Pur)'
-      : dTag === 'D2_OVERHEAT_ONLY'
-      ? 'D2-Surchauffe'
-      : dTag === 'D2_ASSAULT_ONLY'
-      ? 'D2-Assaut'
-      : 'D2-Double';
-
-  return `N=${params.numPlayers} · X=${params.numTurns}t · a=${params.initialTreesPerCell} · ${dShort} · CumulA2=${
-    params.overheatStacksTreeRemoval ? 'Oui' : 'Non'
-  } · Régén=${params.endOfGameRegeneration ? 'Oui' : 'Non'}`;
+  return `N=${params.numPlayers} · X=${params.numTurns}t · a=${params.initialTreesPerCell} · ${buildLeversCode(params)}`;
 }
 
 export function expandParameterSweep(sweep: ParameterSweepInput): Array<{
   variantId: string;
   variantLabel: string;
-  optionDTag: VariantEvaluationResult['optionDTag'];
+  leversCode: string;
   params: SimulationConfig;
 }> {
   const results: Array<{
     variantId: string;
     variantLabel: string;
-    optionDTag: VariantEvaluationResult['optionDTag'];
+    leversCode: string;
     params: SimulationConfig;
   }> = [];
 
   const nVals = sweep.numPlayersValues.length > 0 ? sweep.numPlayersValues : [4];
   const xVals = sweep.numTurnsValues.length > 0 ? sweep.numTurnsValues : [8];
-  const aVals = sweep.initialTreesPerCellValues.length > 0 ? sweep.initialTreesPerCellValues : [3];
-  const ovBaseVals =
-    sweep.overheatIncludesBaseActionValues.length > 0
-      ? sweep.overheatIncludesBaseActionValues
-      : [false];
-  const asBaseVals =
-    sweep.assaultIncludesBaseActionValues.length > 0
-      ? sweep.assaultIncludesBaseActionValues
-      : [false];
-  const ovStackVals =
-    sweep.overheatStacksTreeRemovalValues.length > 0
-      ? sweep.overheatStacksTreeRemovalValues
+  const filteredAVals = (sweep.initialTreesPerCellValues ?? [2]).filter((a) => a === 2 || a === 3);
+  const aVals = filteredAVals.length > 0 ? filteredAVals : [2];
+
+  const setupVals =
+    sweep.staggeredInitialSetupValues && sweep.staggeredInitialSetupValues.length > 0
+      ? sweep.staggeredInitialSetupValues
       : [true];
-  const regenVals =
-    sweep.endOfGameRegenerationValues.length > 0 ? sweep.endOfGameRegenerationValues : [true];
+  const maxNVals =
+    sweep.limitStealthTokensToNValues && sweep.limitStealthTokensToNValues.length > 0
+      ? sweep.limitStealthTokensToNValues
+      : [true];
+  const purgeSabVals =
+    sweep.repairClearsSabotageValues && sweep.repairClearsSabotageValues.length > 0
+      ? sweep.repairClearsSabotageValues
+      : [true];
+  const bullOverVals =
+    sweep.bulldozerOverflowAbattageValues && sweep.bulldozerOverflowAbattageValues.length > 0
+      ? sweep.bulldozerOverflowAbattageValues
+      : [true];
+  const actRepVals =
+    sweep.activeRepairOnMultiHitValues && sweep.activeRepairOnMultiHitValues.length > 0
+      ? sweep.activeRepairOnMultiHitValues
+      : [true];
   const shufVals =
-    sweep.shuffleTacticsTrackValues.length > 0 ? sweep.shuffleTacticsTrackValues : [false];
+    sweep.shuffleTacticsTrackValues && sweep.shuffleTacticsTrackValues.length > 0
+      ? sweep.shuffleTacticsTrackValues
+      : [false];
+
+  const hasCustomInitialMachines =
+    (sweep.initialHarvesterStatus && sweep.initialHarvesterStatus !== 'NORMAL') ||
+    (sweep.initialBulldozerStatus && sweep.initialBulldozerStatus !== 'NORMAL') ||
+    (sweep.initialStumpsCell1 !== undefined && sweep.initialStumpsCell1 > 0);
 
   let idx = 1;
   for (const numPlayers of nVals) {
     for (const numTurns of xVals) {
       for (const initialTreesPerCell of aVals) {
-        for (const overheatIncludesBaseAction of ovBaseVals) {
-          for (const assaultIncludesBaseAction of asBaseVals) {
-            for (const overheatStacksTreeRemoval of ovStackVals) {
-              for (const endOfGameRegeneration of regenVals) {
-                for (const shuffleTacticsTrack of shufVals) {
-                  const initialMachinesState: InitialMachineConfig[] = Array.from(
-                    { length: numPlayers },
-                    () => ({
-                      harvesterPos: 1,
-                      harvesterStatus: sweep.initialHarvesterStatus || 'NORMAL',
-                      bulldozerPos: 1,
-                      bulldozerStatus: sweep.initialBulldozerStatus || 'NORMAL',
-                      initialStumpsCell1: sweep.initialStumpsCell1 || 0,
-                    })
-                  );
+        for (const staggeredInitialSetup of setupVals) {
+          for (const limitStealthTokensToN of maxNVals) {
+            for (const repairClearsSabotage of purgeSabVals) {
+              for (const bulldozerOverflowAbattage of bullOverVals) {
+                for (const activeRepairOnMultiHit of actRepVals) {
+                  for (const shuffleTacticsTrack of shufVals) {
+                    const initialMachinesState: InitialMachineConfig[] | undefined =
+                      hasCustomInitialMachines
+                        ? Array.from({ length: numPlayers }, () => ({
+                            harvesterPos: staggeredInitialSetup ? 2 : 1,
+                            harvesterStatus: sweep.initialHarvesterStatus || 'NORMAL',
+                            bulldozerPos: 1,
+                            bulldozerStatus: sweep.initialBulldozerStatus || 'NORMAL',
+                            initialStumpsCell1:
+                              sweep.initialStumpsCell1 ?? (staggeredInitialSetup ? 1 : 0),
+                          }))
+                        : undefined;
 
-                  const params: SimulationConfig = {
-                    numPlayers,
-                    numTurns,
-                    initialTreesPerCell,
-                    tacticsTrackSetup:
-                      sweep.tacticsTrackSetup && sweep.tacticsTrackSetup.length === 6
-                        ? [...sweep.tacticsTrackSetup]
-                        : ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
-                    shuffleTacticsTrack,
-                    initialMachinesState,
-                    overheatIncludesBaseAction,
-                    assaultIncludesBaseAction,
-                    overheatStacksTreeRemoval,
-                    endOfGameRegeneration,
-                  };
+                    const params: SimulationConfig = {
+                      numPlayers,
+                      numTurns,
+                      initialTreesPerCell,
+                      tacticsTrackSetup:
+                        sweep.tacticsTrackSetup && sweep.tacticsTrackSetup.length === 6
+                          ? [...sweep.tacticsTrackSetup]
+                          : ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
+                      shuffleTacticsTrack,
+                      initialMachinesState,
+                      staggeredInitialSetup,
+                      limitStealthTokensToN,
+                      repairClearsSabotage,
+                      bulldozerOverflowAbattage,
+                      activeRepairOnMultiHit,
+                    };
 
-                  const optionDTag = resolveOptionDTag(
-                    overheatIncludesBaseAction,
-                    assaultIncludesBaseAction
-                  );
-
-                  results.push({
-                    variantId: `V${String(idx++).padStart(3, '0')}`,
-                    variantLabel: buildVariantLabel(params),
-                    optionDTag,
-                    params,
-                  });
+                    results.push({
+                      variantId: `V${String(idx++).padStart(3, '0')}`,
+                      variantLabel: buildVariantLabel(params),
+                      leversCode: buildLeversCode(params),
+                      params,
+                    });
+                  }
                 }
               }
             }
@@ -176,6 +172,7 @@ export function summarizeTableGames(
         DEFEAT: 0,
       },
       meanCuts: 0,
+      meanBulldozerOverflowCuts: 0,
       meanClearings: 0,
       meanStumpsCleared: 0,
       meanOverheats: 0,
@@ -186,7 +183,10 @@ export function summarizeTableGames(
       meanExplosions: 0,
       meanTrapsPlaced: 0,
       meanSabotagesPlaced: 0,
+      meanStealthBlockedByLimit: 0,
       meanRepairs: 0,
+      meanActiveRepairsStep31: 0,
+      meanSabotageClearedByRepair: 0,
       meanRespiteDraws: 0,
     };
   }
@@ -255,6 +255,7 @@ export function summarizeTableGames(
       DEFEAT: bracketCounts.DEFEAT / nGames,
     },
     meanCuts: mean(games.map((g) => g.cutsCount)),
+    meanBulldozerOverflowCuts: mean(games.map((g) => g.bulldozerOverflowCutsCount)),
     meanClearings: mean(games.map((g) => g.clearingsCount)),
     meanStumpsCleared: mean(games.map((g) => g.stumpsClearedCount)),
     meanOverheats: mean(games.map((g) => g.overheatTriggersCount)),
@@ -265,7 +266,10 @@ export function summarizeTableGames(
     meanExplosions: mean(games.map((g) => g.explosionsCount)),
     meanTrapsPlaced: mean(games.map((g) => g.trapsPlacedCount)),
     meanSabotagesPlaced: mean(games.map((g) => g.sabotagesPlacedCount)),
+    meanStealthBlockedByLimit: mean(games.map((g) => g.stealthBlockedByLimitCount)),
     meanRepairs: mean(games.map((g) => g.repairsCount)),
+    meanActiveRepairsStep31: mean(games.map((g) => g.activeRepairsStep31Count)),
+    meanSabotageClearedByRepair: mean(games.map((g) => g.sabotageClearedByRepairCount)),
     meanRespiteDraws: mean(games.map((g) => g.respiteDrawsOnDestroyedCount)),
   };
 }
@@ -298,7 +302,6 @@ export function evaluateFourCriteria(
   const combatVsRandomGainScore = clamp((deltaCombatVsRandom / 0.18) * 50, 0, 50);
 
   // Gain ou compétitivité Hybride (Furtivité + Combat) vs Combat Pur :
-  // Si deltaHybridVsCombat >= +0.04 => 50/50 ; si 0 => 35/50 ; + bonus d'usage effectif des pièges/sabotages
   const trapsSabPerGame = primarySummary
     ? primarySummary.meanTrapsPlaced + primarySummary.meanSabotagesPlaced
     : 0;
@@ -416,7 +419,7 @@ export function evaluateFourCriteria(
 export function evaluateVariantGames(
   variantId: string,
   variantLabel: string,
-  optionDTag: VariantEvaluationResult['optionDTag'],
+  leversCode: string,
   params: SimulationConfig,
   gamesByTableId: Map<string, SingleGameResult[]>,
   tableConfigs: TableConfig[]
@@ -449,7 +452,7 @@ export function evaluateVariantGames(
   return {
     variantId,
     variantLabel,
-    optionDTag,
+    leversCode,
     params,
     tableSummaries,
     criteria,
@@ -460,22 +463,27 @@ export function evaluateVariantGames(
 
 export function generateCampaignMarkdownReport(campaign: CampaignRecord): string {
   const lines: string[] = [];
-  lines.push(`# Rapport de Simulation Monte-Carlo — Amazonia (Nouvelle Architecture Combat & Furtivité)`);
+  lines.push(
+    `# Rapport de Simulation Monte-Carlo — Amazonia v3.1 (D2-Double Figé & 5 Leviers d'Équilibrage)`
+  );
   lines.push(`- **Campagne** : ${campaign.config.name} (\`${campaign.id}\`)`);
   lines.push(`- **Type** : \`${campaign.config.type}\``);
   lines.push(`- **Statut** : \`${campaign.status}\``);
+  lines.push(
+    `- **Options figées en dur** : \`overheatIncludesBaseAction = true\`, \`assaultIncludesBaseAction = true\` (D2-Double), \`overheatStacksTreeRemoval = true\` (CumulA2), \`endOfGameRegeneration = true\``
+  );
   lines.push(
     `- **Parties simulées** : ${campaign.progress.completedGames.toLocaleString('fr-FR')} / ${campaign.progress.totalTargetGames.toLocaleString('fr-FR')} (${campaign.progress.gamesPerSecond.toFixed(0)} parties/s)`
   );
   lines.push(``);
 
   if (campaign.variantResults.length > 0) {
-    lines.push(`## 1. Classement Synthétique des Variantes & Comparaison Options D1 / D2`);
+    lines.push(`## 1. Classement Synthétique des Variantes & État des 5 Leviers`);
     lines.push(
-      `| ID | Variante | Option D | Note Design (/100) | Survie Hybride (%) | Arbres Perdus (Moy±σ) | Abattages | Terrassements | Surchauffes | Assauts | Parades S=2+k | Mises HS S≥3+k | Explosions | Pièges+Sab. |`
+      `| ID | Variante | Note Design (/100) | Survie Hybride (%) | Survie Combat (%) | Arbres Perdus (Moy±σ) | Abattages (dont BullOver) | Terrassements | Surchauffes | Assauts | Parades S=2+k | Mises HS S≥3+k | Explosions | Pièges+Sab (Bloqués MaxN) | Réparations (ActRep 3.1 / PurgeSab) |`
     );
     lines.push(
-      `|---|---|---|---|---|---|---|---|---|---|---|---|---|---|`
+      `|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|`
     );
 
     const sorted = [...campaign.variantResults].sort(
@@ -483,14 +491,20 @@ export function generateCampaignMarkdownReport(campaign: CampaignRecord): string
     );
 
     for (const v of sorted) {
-      const mainTable =
-        v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_HYBRID') ??
-        v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_COMBAT_PURE') ??
-        v.tableSummaries[0];
+      const hybridTable = v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_HYBRID');
+      const combatTable = v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_COMBAT_PURE');
+      const mainTable = hybridTable ?? combatTable ?? v.tableSummaries[0];
 
       if (!mainTable) continue;
+      const survHybridStr = hybridTable
+        ? `${(hybridTable.meanSurvivalRateHorizon * 100).toFixed(1)}%`
+        : `${(mainTable.meanSurvivalRateHorizon * 100).toFixed(1)}%`;
+      const survCombatStr = combatTable
+        ? `${(combatTable.meanSurvivalRateHorizon * 100).toFixed(1)}%`
+        : `-`;
+
       lines.push(
-        `| ${v.variantId} | ${v.variantLabel} | ${OPTION_D_LABELS[v.optionDTag].title} | **${v.criteria.overallDesignScore}/100** | ${(mainTable.meanSurvivalRateHorizon * 100).toFixed(1)}% | ${mainTable.meanTreesLostTotal.toFixed(2)} ± ${mainTable.stdDevTreesLostTotal.toFixed(2)} | ${mainTable.meanCuts.toFixed(2)} | ${mainTable.meanClearings.toFixed(2)} | ${mainTable.meanOverheats.toFixed(2)} | ${mainTable.meanAssaults.toFixed(2)} | ${mainTable.meanSimpleParries.toFixed(2)} | ${mainTable.meanParryAndHS.toFixed(2)} | ${mainTable.meanExplosions.toFixed(2)} | ${(mainTable.meanTrapsPlaced + mainTable.meanSabotagesPlaced).toFixed(2)} |`
+        `| ${v.variantId} | ${v.variantLabel} | **${v.criteria.overallDesignScore}/100** | ${survHybridStr} | ${survCombatStr} | ${mainTable.meanTreesLostTotal.toFixed(2)} ± ${mainTable.stdDevTreesLostTotal.toFixed(2)} | ${mainTable.meanCuts.toFixed(2)} (${mainTable.meanBulldozerOverflowCuts.toFixed(2)}) | ${mainTable.meanClearings.toFixed(2)} | ${mainTable.meanOverheats.toFixed(2)} | ${mainTable.meanAssaults.toFixed(2)} | ${mainTable.meanSimpleParries.toFixed(2)} | ${mainTable.meanParryAndHS.toFixed(2)} | ${mainTable.meanExplosions.toFixed(2)} | ${(mainTable.meanTrapsPlaced + mainTable.meanSabotagesPlaced).toFixed(2)} (${mainTable.meanStealthBlockedByLimit.toFixed(2)}) | ${mainTable.meanRepairs.toFixed(2)} (${mainTable.meanActiveRepairsStep31.toFixed(2)} / ${mainTable.meanSabotageClearedByRepair.toFixed(2)}) |`
       );
     }
     lines.push(``);

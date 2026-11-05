@@ -8,6 +8,7 @@ import {
 import {
   DEFAULT_SWEEP_INPUT,
   DEFAULT_TABLE_CONFIGS,
+  FIVE_LEVERS_META,
 } from '../sim/i18n';
 import { expandParameterSweep } from '../sim/evaluator';
 
@@ -15,6 +16,14 @@ interface EvaluationBuilderViewProps {
   onStartCampaign: (config: Partial<CampaignConfig>) => Promise<void>;
   isSubmitting: boolean;
 }
+
+type SweepBoolKey =
+  | 'staggeredInitialSetupValues'
+  | 'limitStealthTokensToNValues'
+  | 'repairClearsSabotageValues'
+  | 'bulldozerOverflowAbattageValues'
+  | 'activeRepairOnMultiHitValues'
+  | 'shuffleTacticsTrackValues';
 
 const TACTIC_PRESETS: Array<{ label: string; setup: TacticType[] }> = [
   {
@@ -27,7 +36,7 @@ const TACTIC_PRESETS: Array<{ label: string; setup: TacticType[] }> = [
   },
   {
     label: 'Bulldozers en tête [B1, B2, B3, A1, A2, A3]',
-    setup: ['B1', 'B2', 'B3', A1_FALLBACK(), 'A2', 'A3'],
+    setup: ['B1', 'B2', 'B3', 'A1', 'A2', 'A3'],
   },
   {
     label: 'Haute Intensité en tête [A3, B3, A2, B2, A1, B1]',
@@ -35,27 +44,21 @@ const TACTIC_PRESETS: Array<{ label: string; setup: TacticType[] }> = [
   },
 ];
 
-function A1_FALLBACK(): TacticType {
-  return 'A1';
-}
-
 export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
   onStartCampaign,
   isSubmitting,
 }) => {
-  const [mode, setMode] = useState<'D1_D2_COMPARISON' | 'MONTE_CARLO_SWEEP'>(
-    'D1_D2_COMPARISON'
+  const [mode, setMode] = useState<'FIVE_LEVERS_ABLATION' | 'MONTE_CARLO_SWEEP'>(
+    'MONTE_CARLO_SWEEP'
   );
   const [campaignName, setCampaignName] = useState<string>(
-    'Comparaison Directe Options D1 vs D2 (Surchauffe × Assaut)'
+    'Campagne Monte-Carlo v3.1 — Étalonnage des 5 Leviers'
   );
   const [gamesPerVariant, setGamesPerVariant] = useState<number>(200);
   const [baseSeed, setBaseSeed] = useState<number>(42000);
 
   const [sweep, setSweep] = useState<ParameterSweepInput>({
     ...DEFAULT_SWEEP_INPUT,
-    overheatIncludesBaseActionValues: [false, true],
-    assaultIncludesBaseActionValues: [false, true],
   });
 
   const [selectedTableIds, setSelectedTableIds] = useState<string[]>(
@@ -75,20 +78,32 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
     });
   };
 
-  const toggleBoolValue = (
-    key:
-      | 'overheatIncludesBaseActionValues'
-      | 'assaultIncludesBaseActionValues'
-      | 'overheatStacksTreeRemovalValues'
-      | 'endOfGameRegenerationValues'
-      | 'shuffleTacticsTrackValues',
-    val: boolean
-  ) => {
-    setSweep((prev) => {
-      const exists = prev[key].includes(val);
-      const next = exists ? prev[key].filter((x) => x !== val) : [...prev[key], val];
-      return { ...prev, [key]: next.length > 0 ? next : [val] };
-    });
+  const setBoolSelection = (key: SweepBoolKey, values: boolean[]) => {
+    setSweep((prev) => ({
+      ...prev,
+      [key]: values,
+    }));
+  };
+
+  const applyAllLeversPreset = (modePreset: 'ALL_TRUE' | 'ALL_FALSE' | 'SWEEP_ALL_32') => {
+    const valArr =
+      modePreset === 'ALL_TRUE'
+        ? [true]
+        : modePreset === 'ALL_FALSE'
+        ? [false]
+        : [false, true];
+    setSweep((prev) => ({
+      ...prev,
+      staggeredInitialSetupValues: [...valArr],
+      limitStealthTokensToNValues: [...valArr],
+      repairClearsSabotageValues: [...valArr],
+      bulldozerOverflowAbattageValues: [...valArr],
+      activeRepairOnMultiHitValues: [...valArr],
+    }));
+    if (modePreset === 'SWEEP_ALL_32') {
+      setMode('FIVE_LEVERS_ABLATION');
+      setCampaignName('Ablation Croisée Complète des 5 Leviers (2^5 = 32 variantes)');
+    }
   };
 
   const toggleTableConfig = (id: string) => {
@@ -99,20 +114,9 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
     });
   };
 
-  const effectiveSweep: ParameterSweepInput = useMemo(() => {
-    if (mode === 'D1_D2_COMPARISON') {
-      return {
-        ...sweep,
-        overheatIncludesBaseActionValues: [false, true],
-        assaultIncludesBaseActionValues: [false, true],
-      };
-    }
-    return sweep;
-  }, [mode, sweep]);
-
   const expandedVariants = useMemo(
-    () => expandParameterSweep(effectiveSweep),
-    [effectiveSweep]
+    () => expandParameterSweep(sweep),
+    [sweep]
   );
 
   const totalSimulationsCount =
@@ -124,10 +128,10 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
       selectedTableIds.includes(t.id)
     );
     await onStartCampaign({
-      name: campaignName.trim() || 'Campagne Monte-Carlo',
+      name: campaignName.trim() || 'Campagne Monte-Carlo v3.1',
       type: mode,
       gamesPerVariantAndTable: gamesPerVariant,
-      sweep: effectiveSweep,
+      sweep,
       selectedTableConfigs: selectedTables,
       includeCalibrationTables: true,
       baseSeed,
@@ -136,59 +140,28 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
 
   return (
     <form onSubmit={handleLaunch} className="space-y-6">
-      {/* Choix du mode de campagne */}
+      {/* En-tête et Règles Figées v3.1 */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
-        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-1">
-          Configuration d'une Campagne de Simulation Monte-Carlo
-        </h2>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-          Toutes les variantes sont évaluées sur les mêmes graines aléatoires appariées (Paired Seeds) pour isoler l'impact exact de chaque paramètre.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
-          <button
-            type="button"
-            onClick={() => {
-              setMode('D1_D2_COMPARISON');
-              setCampaignName(
-                'Comparaison Directe Options D1 vs D2 (Surchauffe × Assaut)'
-              );
-            }}
-            className={`text-left p-4 rounded-lg border transition-colors cursor-pointer ${
-              mode === 'D1_D2_COMPARISON'
-                ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
-                : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-            }`}
-          >
-            <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-              Mode 1 — Comparaison Directe Options D1 vs D2 (2×2)
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
-              Croise automatiquement les 4 combinaisons de{' '}
-              <code>overheatIncludesBaseAction</code> (D1/D2) et{' '}
-              <code>assaultIncludesBaseAction</code> (D1/D2) à paramètres fixes ou balayés.
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Configurateur de Campagne Monte-Carlo v3.1 (Graines Appariées)
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Suite à la 1ère campagne, l'espace de recherche est resserré autour des options D2-Double figées et des 5 nouveaux leviers d'équilibrage.
             </p>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setMode('MONTE_CARLO_SWEEP');
-              setCampaignName('Balayage Paramétrique Monte-Carlo Personnalisé');
-            }}
-            className={`text-left p-4 rounded-lg border transition-colors cursor-pointer ${
-              mode === 'MONTE_CARLO_SWEEP'
-                ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
-                : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-            }`}
-          >
-            <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-              Mode 2 — Balayage Paramétrique Complet (Variables A, B, C, D)
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
-              Sélectionnez librement les valeurs de $N$, $X$, $a$, l'ordre de la Piste des Tactiques, l'état initial des machines et les règles spéciales.
-            </p>
-          </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5 text-[11px] font-mono">
+            <span className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+              ✓ D2-Double figé (A2/B2 & A3/B3 incluent base)
+            </span>
+            <span className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+              ✓ CumulA2 = true
+            </span>
+            <span className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+              ✓ Régénération = true
+            </span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -233,12 +206,12 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
         </div>
       </div>
 
-      {/* SECTION VARIABLES A, B, C, D DE LA SPÉCIFICATION (§2) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Variables A & B : Structure & Piste des Tactiques */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+      {/* SECTION PRINCIPALE : PARAMÈTRES DE TABLE & LES 5 NOUVEAUX LEVIERS */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Colonne Gauche (5 cols) : Paramètres de Table (N, X, a in {2,3}) & Piste des Tactiques */}
+        <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
           <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 border-b border-slate-200 dark:border-slate-800 pb-2">
-            2.1 & 2.2 — Paramètres de Table ($N, X, a$) & Piste des Tactiques
+            1. Paramètres Structurels (N, X, a ∈ 2..3) & Piste des Tactiques
           </h3>
 
           {/* N joueurs */}
@@ -270,7 +243,7 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
           {/* X tours */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Nombre de tours de la partie ($X$)
+              Nombre de tours de la partie (X)
             </label>
             <div className="flex flex-wrap gap-2">
               {[6, 7, 8, 9, 10, 12].map((x) => {
@@ -293,13 +266,13 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
             </div>
           </div>
 
-          {/* a arbres par case */}
+          {/* a arbres par case (limité à 2 et 3, défaut 2) */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Arbres debout initiaux par case ($a$)
+              Arbres debout initiaux par case (a = 2 par défaut, ou a = 3 ; a = 4 retiré)
             </label>
             <div className="flex flex-wrap gap-2">
-              {[2, 3, 4].map((a) => {
+              {[2, 3].map((a) => {
                 const active = sweep.initialTreesPerCellValues.includes(a);
                 return (
                   <button
@@ -312,7 +285,7 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
                         : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
                     }`}
                   >
-                    a = {a} arbres/case
+                    a = {a} arbres/case {a === 2 ? '(Défaut)' : ''}
                   </button>
                 );
               })}
@@ -345,23 +318,29 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
           {/* Mélange aléatoire de la piste */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Mélange de la Piste des Tactiques en début de partie (<code>shuffleTacticsTrack</code>)
+              Mélange de la Piste des Tactiques (<code>shuffleTacticsTrack</code>)
             </label>
-            <div className="flex gap-2">
-              {[false, true].map((val) => {
-                const active = sweep.shuffleTacticsTrackValues.includes(val);
+            <div className="flex flex-wrap gap-2">
+              {[
+                { label: 'Ordre Fixe (Non)', vals: [false] },
+                { label: 'Mélangée (Oui)', vals: [true] },
+                { label: 'Tester les 2 (Sweep)', vals: [false, true] },
+              ].map((opt) => {
+                const active =
+                  sweep.shuffleTacticsTrackValues.length === opt.vals.length &&
+                  opt.vals.every((v) => sweep.shuffleTacticsTrackValues.includes(v));
                 return (
                   <button
-                    key={String(val)}
+                    key={opt.label}
                     type="button"
-                    onClick={() => toggleBoolValue('shuffleTacticsTrackValues', val)}
-                    className={`px-3 py-1.5 text-xs font-medium rounded border cursor-pointer ${
+                    onClick={() => setBoolSelection('shuffleTacticsTrackValues', opt.vals)}
+                    className={`px-2.5 py-1.5 text-xs font-medium rounded border cursor-pointer ${
                       active
                         ? 'bg-emerald-700 text-white border-emerald-700'
                         : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
                     }`}
                   >
-                    {val ? 'Mélangée (Aléatoire)' : 'Ordre Fixe'}
+                    {opt.label}
                   </button>
                 );
               })}
@@ -369,187 +348,99 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
           </div>
         </div>
 
-        {/* Variables C & D : État initial des machines & Arbitrages Surchauffe / Assaut */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 border-b border-slate-200 dark:border-slate-800 pb-2">
-            2.3 & 2.4 — État Initial des Machines & Arbitrages des Règles (D1 vs D2)
-          </h3>
-
-          {/* État initial Abatteuse & Bulldozer */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {/* Colonne Droite (7 cols) : Les 5 Nouvelles Variables d'Équilibrage */}
+        <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-2.5">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Statut initial Abatteuse (Case 1)
-              </label>
-              <select
-                value={sweep.initialHarvesterStatus}
-                onChange={(e) =>
-                  setSweep((prev) => ({
-                    ...prev,
-                    initialHarvesterStatus: e.target.value as 'NORMAL' | 'HS',
-                  }))
-                }
-                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                2. Les 5 Variables d'Équilibrage v3.1 (Configurables & Balayables)
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Choisissez pour chaque levier : Activé (défaut true), Désactivé (false), ou Tester les 2 (Ablation A/B).
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => applyAllLeversPreset('ALL_TRUE')}
+                className="px-2.5 py-1 text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 rounded cursor-pointer hover:bg-emerald-100"
               >
-                <option value="NORMAL">NORMAL (Prête)</option>
-                <option value="HS">HS (Hors Service)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Statut initial Bulldozer (Case 1)
-              </label>
-              <select
-                value={sweep.initialBulldozerStatus}
-                onChange={(e) =>
-                  setSweep((prev) => ({
-                    ...prev,
-                    initialBulldozerStatus: e.target.value as 'NORMAL' | 'HS',
-                  }))
-                }
-                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+                Tout Activer (Défaut)
+              </button>
+              <button
+                type="button"
+                onClick={() => applyAllLeversPreset('ALL_FALSE')}
+                className="px-2.5 py-1 text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 rounded cursor-pointer hover:bg-slate-200"
               >
-                <option value="NORMAL">NORMAL (Prêt)</option>
-                <option value="HS">HS (Hors Service)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Souches initiales en Case 1
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={4}
-                value={sweep.initialStumpsCell1}
-                onChange={(e) =>
-                  setSweep((prev) => ({
-                    ...prev,
-                    initialStumpsCell1: Math.max(0, Number(e.target.value) || 0),
-                  }))
-                }
-                className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
-              />
+                Tout Désactiver (Classique)
+              </button>
+              <button
+                type="button"
+                onClick={() => applyAllLeversPreset('SWEEP_ALL_32')}
+                className="px-2.5 py-1 text-[11px] font-semibold bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 rounded cursor-pointer hover:bg-amber-100"
+              >
+                Balayer les 2^5 = 32 Combinaisons
+              </button>
             </div>
           </div>
 
-          {/* Option D : Surchauffe A2/B2 */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Surchauffe A2/B2 inclut l'action de base (<code>overheatIncludesBaseAction</code>)
-            </label>
-            {mode === 'D1_D2_COMPARISON' ? (
-              <div className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
-                ✓ Balayage automatique [D1 (false) + D2 (true)] activé par le Mode 1
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                {[false, true].map((val) => {
-                  const active = sweep.overheatIncludesBaseActionValues.includes(val);
-                  return (
-                    <button
-                      key={String(val)}
-                      type="button"
-                      onClick={() => toggleBoolValue('overheatIncludesBaseActionValues', val)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded border cursor-pointer ${
-                        active
-                          ? 'bg-emerald-700 text-white border-emerald-700'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
-                      }`}
-                    >
-                      {val ? 'D2 : Oui (Base + Surchauffe)' : 'D1 : Non (Surchauffe seule)'}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <div className="space-y-3">
+            {FIVE_LEVERS_META.map((lever) => {
+              const sweepKey = `${lever.key}Values` as SweepBoolKey;
+              const currentVals = sweep[sweepKey];
 
-          {/* Option D : Assaut A3/B3 */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Assaut A3/B3 inclut l'action de base (<code>assaultIncludesBaseAction</code>)
-            </label>
-            {mode === 'D1_D2_COMPARISON' ? (
-              <div className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
-                ✓ Balayage automatique [D1 (false) + D2 (true)] activé par le Mode 1
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                {[false, true].map((val) => {
-                  const active = sweep.assaultIncludesBaseActionValues.includes(val);
-                  return (
-                    <button
-                      key={String(val)}
-                      type="button"
-                      onClick={() => toggleBoolValue('assaultIncludesBaseActionValues', val)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded border cursor-pointer ${
-                        active
-                          ? 'bg-emerald-700 text-white border-emerald-700'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
-                      }`}
-                    >
-                      {val ? 'D2 : Oui (Base + Assaut)' : 'D1 : Non (Assaut seul)'}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+              return (
+                <div
+                  key={lever.key}
+                  className="p-3 rounded-lg bg-slate-50/70 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 rounded">
+                        {lever.shortCode}
+                      </span>
+                      <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                        {lever.title}
+                      </span>
+                      <code className="text-[11px] text-slate-400 hidden xl:inline">
+                        ({lever.key})
+                      </code>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                      {lever.description}
+                    </p>
+                  </div>
 
-          {/* Cumul de Surchauffes & Régénération */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Cumul de Surchauffes (<code>overheatStacksTreeRemoval</code>)
-              </label>
-              <div className="flex gap-2">
-                {[true, false].map((val) => {
-                  const active = sweep.overheatStacksTreeRemovalValues.includes(val);
-                  return (
-                    <button
-                      key={String(val)}
-                      type="button"
-                      onClick={() => toggleBoolValue('overheatStacksTreeRemovalValues', val)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded border cursor-pointer ${
-                        active
-                          ? 'bg-emerald-700 text-white border-emerald-700'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
-                      }`}
-                    >
-                      {val ? 'Oui (k pions)' : 'Non (1 pion)'}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Régénération Fin de Partie (<code>endOfGameRegeneration</code>)
-              </label>
-              <div className="flex gap-2">
-                {[true, false].map((val) => {
-                  const active = sweep.endOfGameRegenerationValues.includes(val);
-                  return (
-                    <button
-                      key={String(val)}
-                      type="button"
-                      onClick={() => toggleBoolValue('endOfGameRegenerationValues', val)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded border cursor-pointer ${
-                        active
-                          ? 'bg-emerald-700 text-white border-emerald-700'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
-                      }`}
-                    >
-                      {val ? 'Activée (+1 arbre/case)' : 'Désactivée'}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {[
+                      { label: 'Oui (true)', vals: [true] },
+                      { label: 'Non (false)', vals: [false] },
+                      { label: 'Les 2 (Sweep)', vals: [false, true] },
+                    ].map((opt) => {
+                      const isSel =
+                        currentVals.length === opt.vals.length &&
+                        opt.vals.every((v) => currentVals.includes(v));
+                      return (
+                        <button
+                          key={opt.label}
+                          type="button"
+                          onClick={() => setBoolSelection(sweepKey, opt.vals)}
+                          className={`px-2.5 py-1.5 text-xs font-medium rounded border cursor-pointer transition-colors ${
+                            isSel
+                              ? opt.vals.length === 2
+                                ? 'bg-amber-600 text-white border-amber-600'
+                                : 'bg-emerald-700 text-white border-emerald-700'
+                              : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -557,7 +448,7 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
       {/* SÉLECTION DES PROFILS D'IA & LANCEMENT */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
         <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-2">
-          Profils de Bots à Évaluer (Phase 2 — Placement des 2 Jetons Défenseurs)
+          3. Profils de Bots à Évaluer (Phase 2 — Placement des 2 Jetons Défenseurs)
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           {DEFAULT_TABLE_CONFIGS.map((tc) => {

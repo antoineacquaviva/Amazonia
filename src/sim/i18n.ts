@@ -5,7 +5,6 @@ import {
   SimulationConfig,
   TableConfig,
   TacticType,
-  VariantEvaluationResult,
   VictoryBracket,
 } from './types';
 
@@ -20,68 +19,97 @@ export const DEFAULT_TACTICS_TRACK: TacticType[] = [
 
 export function createDefaultMachinesState(
   numPlayers: number,
+  staggeredInitialSetup: boolean = true,
   harvesterStatus: 'NORMAL' | 'HS' = 'NORMAL',
   bulldozerStatus: 'NORMAL' | 'HS' = 'NORMAL',
   initialStumpsCell1 = 0
 ): InitialMachineConfig[] {
   return Array.from({ length: numPlayers }, () => ({
-    harvesterPos: 1,
-    harvesterStatus,
+    harvesterPos: staggeredInitialSetup ? 2 : 1,
+    harvesterStatus: staggeredInitialSetup ? 'NORMAL' : harvesterStatus,
     bulldozerPos: 1,
-    bulldozerStatus,
-    initialStumpsCell1,
+    bulldozerStatus: staggeredInitialSetup ? 'NORMAL' : bulldozerStatus,
+    initialStumpsCell1: staggeredInitialSetup ? 1 : initialStumpsCell1,
   }));
 }
 
 export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = {
   numPlayers: 4,
   numTurns: 8,
-  initialTreesPerCell: 3,
+  initialTreesPerCell: 2,
   tacticsTrackSetup: [...DEFAULT_TACTICS_TRACK],
   shuffleTacticsTrack: false,
-  initialMachinesState: createDefaultMachinesState(4),
-  overheatIncludesBaseAction: false,
-  assaultIncludesBaseAction: false,
-  overheatStacksTreeRemoval: true,
-  endOfGameRegeneration: true,
+  initialMachinesState: createDefaultMachinesState(4, true),
+  staggeredInitialSetup: true,
+  limitStealthTokensToN: true,
+  repairClearsSabotage: true,
+  bulldozerOverflowAbattage: true,
+  activeRepairOnMultiHit: true,
 };
 
 export const DEFAULT_SWEEP_INPUT: ParameterSweepInput = {
   numPlayersValues: [4],
   numTurnsValues: [8],
-  initialTreesPerCellValues: [3],
-  overheatIncludesBaseActionValues: [false],
-  assaultIncludesBaseActionValues: [false],
-  overheatStacksTreeRemovalValues: [true],
-  endOfGameRegenerationValues: [true],
+  initialTreesPerCellValues: [2],
   shuffleTacticsTrackValues: [false],
   tacticsTrackSetup: [...DEFAULT_TACTICS_TRACK],
+  staggeredInitialSetupValues: [true],
+  limitStealthTokensToNValues: [true],
+  repairClearsSabotageValues: [true],
+  bulldozerOverflowAbattageValues: [true],
+  activeRepairOnMultiHitValues: [true],
   initialHarvesterStatus: 'NORMAL',
   initialBulldozerStatus: 'NORMAL',
   initialStumpsCell1: 0,
 };
 
-export const OPTION_D_LABELS: Record<
-  VariantEvaluationResult['optionDTag'],
-  { title: string; subtitle: string }
-> = {
-  D1_NONE: {
-    title: 'Option D1 — Surchauffe & Assaut Purs (Sans action de base)',
-    subtitle: 'overheatIncludesBaseAction = false · assaultIncludesBaseAction = false',
+export const FIVE_LEVERS_META = [
+  {
+    key: 'staggeredInitialSetup' as const,
+    shortCode: 'Setup',
+    title: '1. Décalage initial & souches au départ (staggeredInitialSetup)',
+    trueLabel: 'Décalé (A en c=2, B en c=1, 1 souche en c=1..2)',
+    falseLabel: 'Classique (A et B en c=1, 0 souche)',
+    description:
+      'Si true : Abatteuse en case 2 (NORMAL), Bulldozer en case 1 (NORMAL), cases 1 et 2 à 1 souche + (a-1) arbre(s) debout.',
   },
-  D2_OVERHEAT_ONLY: {
-    title: 'Option D2 (Surchauffe) — A2/B2 incluent l’action de base',
-    subtitle: 'overheatIncludesBaseAction = true · assaultIncludesBaseAction = false',
+  {
+    key: 'limitStealthTokensToN' as const,
+    shortCode: 'MaxN',
+    title: '2. Réserve globale limitée à N jetons Furtivité (limitStealthTokensToN)',
+    trueLabel: 'Limitée à N jetons (Pièges + Sabotages ≤ N)',
+    falseLabel: 'Illimitée',
+    description:
+      'Si true : sum(hasTrap) + sum(hasSabotage) ≤ N. En cas de double Sabotage avec 1 seul jeton restant, sabote prioritairement l’Abatteuse.',
   },
-  D2_ASSAULT_ONLY: {
-    title: 'Option D2 (Assaut) — A3/B3 incluent l’action de base',
-    subtitle: 'overheatIncludesBaseAction = false · assaultIncludesBaseAction = true',
+  {
+    key: 'repairClearsSabotage' as const,
+    shortCode: 'PurgeSab',
+    title: '3. Sabotage éphémère sur réparation (repairClearsSabotage)',
+    trueLabel: 'Actif (Réparation retire le Sabotage)',
+    falseLabel: 'Inactif (Sabotage conservé après réparation)',
+    description:
+      'Si true : toute machine HS réparée (en Étape 3.1 ou Étape 3.4) perd immédiatement son jeton Sabotage.',
   },
-  D2_BOTH: {
-    title: 'Option D2 Complet — Surchauffe & Assaut incluent l’action de base',
-    subtitle: 'overheatIncludesBaseAction = true · assaultIncludesBaseAction = true',
+  {
+    key: 'bulldozerOverflowAbattage' as const,
+    shortCode: 'BullOver',
+    title: '4. Débordement du Bulldozer en Abattage (bulldozerOverflowAbattage)',
+    trueLabel: 'Actif (Terrassement sur 0 souche → 1 Abattage)',
+    falseLabel: 'Inactif (Terrassement sur 0 souche sans effet)',
+    description:
+      'Si true : lors du Terrassement (n_actionsB ≥ 1), s’il n’y a aucune souche sur la case, la 1re action coupe 1 arbre debout en souche.',
   },
-};
+  {
+    key: 'activeRepairOnMultiHit' as const,
+    shortCode: 'ActRep',
+    title: '5. Réparation active immédiate sur cumul (activeRepairOnMultiHit)',
+    trueLabel: 'Actif (m ≥ 2 cartes sur HS → répare + avance en p+1)',
+    falseLabel: 'Inactif (toutes les cartes en faceDown sur p)',
+    description:
+      'Si true : si une machine HS reçoit m ≥ 2 cartes à l’Étape 3.1, la 1re carte la répare immédiatement et elle avance en p+1 avec m-1 cartes face visible.',
+  },
+];
 
 export const VICTORY_BRACKET_LABELS: Record<
   VictoryBracket,
@@ -129,7 +157,7 @@ export const TACTIC_META: Record<
     machine: 'A',
     category: 'OVERHEAT',
     description:
-      'Enlève définitivement 1 pion Arbre (debout sinon souche) et passe l’Abatteuse en état HS (Option D2 : +1 Abattage avant Surchauffe). Si combinée avec A3 : Explosion !',
+      'Inclut 1 Abattage de base + enlève définitivement 1 pion Arbre (debout sinon souche) et passe l’Abatteuse en état HS. Si combinée avec A3 : Explosion !',
   },
   A3: {
     code: 'A3',
@@ -137,7 +165,7 @@ export const TACTIC_META: Record<
     machine: 'A',
     category: 'ASSAULT',
     description:
-      'Décale les seuils de défense de la case de +1 (k_assault) et passe l’Abatteuse en état HS après combat (Option D2 : +1 Abattage). Si combinée avec A2 : Explosion !',
+      'Inclut 1 Abattage de base + décale les seuils de défense de +1 (k_assault) et passe l’Abatteuse en état HS après combat. Si combinée avec A2 : Explosion !',
   },
   B1: {
     code: 'B1',
@@ -145,7 +173,7 @@ export const TACTIC_META: Record<
     machine: 'B',
     category: 'BASE',
     description:
-      'Le Bulldozer avance (si NORMAL) et rase toutes les Souches de la case (puis abat des arbres si actions multiples).',
+      'Le Bulldozer avance (si NORMAL) et rase toutes les Souches de la case (ou abat 1 arbre si 0 souche avec BullOver).',
   },
   B2: {
     code: 'B2',
@@ -153,7 +181,7 @@ export const TACTIC_META: Record<
     machine: 'B',
     category: 'OVERHEAT',
     description:
-      'Enlève définitivement 1 pion Arbre (debout sinon souche) et passe le Bulldozer en état HS (Option D2 : +1 action de base Bulldozer avant Surchauffe). Si combinée avec B3 : Explosion !',
+      'Inclut 1 action de base Bulldozer + enlève définitivement 1 pion Arbre (debout sinon souche) et passe le Bulldozer en état HS. Si combinée avec B3 : Explosion !',
   },
   B3: {
     code: 'B3',
@@ -161,7 +189,7 @@ export const TACTIC_META: Record<
     machine: 'B',
     category: 'ASSAULT',
     description:
-      'Décale les seuils de défense de la case de +1 (k_assault) et passe le Bulldozer en état HS après combat (Option D2 : +1 action de base Bulldozer). Si combinée avec B2 : Explosion !',
+      'Inclut 1 action de base Bulldozer + décale les seuils de défense de +1 (k_assault) et passe le Bulldozer en état HS après combat. Si combinée avec B2 : Explosion !',
   },
 };
 
@@ -197,7 +225,7 @@ export const BOT_PROFILE_META: Record<
     label: 'Bot « Hybride Furtivité + Combat » (Proactif)',
     shortLabel: 'Hybride Furtivité + Combat',
     description:
-      'Coordonne des paires de Défenseurs en Piste Furtivité (>=2) pour poser des Pièges en p+1 et des Sabotages sur les machines, puis bascule en Piste Tactique pour déclencher des Parades (S=2+k) et Mises HS (S=3+k) amplifiées par les Pièges/Sabotages.',
+      'Coordonne des paires en Furtivité (dans la limite de N jetons si MaxN est actif, et sans saboter une machine HS si PurgeSab est actif) pour poser Pièges/Sabotages, puis bascule en Piste Tactique.',
   },
   OMNISCIENT: {
     id: 'OMNISCIENT',
