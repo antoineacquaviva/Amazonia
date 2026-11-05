@@ -4,16 +4,21 @@ import os from 'node:os';
 import { Worker } from 'node:worker_threads';
 import {
   BotProfileId,
+  BulldozerZeroStumpAction,
   CampaignConfig,
   CampaignRecord,
+  CombatThresholdShift,
   SimulationConfig,
   SingleGameResult,
   TableConfig,
+  TacticalDefenderCap,
+  TacticsTrackPreset,
   VariantEvaluationResult,
 } from '../sim/types';
 import {
   DEFAULT_SWEEP_INPUT,
   DEFAULT_TABLE_CONFIGS,
+  TACTICS_TRACK_PRESETS,
 } from '../sim/i18n';
 import { runSingleGame } from '../sim/engine';
 import {
@@ -333,13 +338,14 @@ export class CampaignManager {
         const raw = fs.readFileSync(fullPath, 'utf-8');
         const record = JSON.parse(raw) as CampaignRecord;
 
-        // Vérifie la compatibilité avec le modèle v3.1 (présence de leversCode)
+        // Vérifie la compatibilité avec le modèle v3.2 (présence de infoAndCoordMetrics et des nouveaux leviers)
         const isCompatible =
           record.config?.type === 'ORACLE_STRESS_TEST'
-            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.COMBAT_PURE) &&
-              Boolean(record.config?.sweep?.staggeredInitialSetupValues)
-            : record.variantResults.length === 0 ||
-              Boolean(record.variantResults[0]?.leversCode);
+            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.COORD_HYBRID) &&
+              Boolean(record.config?.sweep?.tacticalDefenderCapValues)
+            : (record.variantResults.length === 0 &&
+                Boolean(record.config?.sweep?.tacticalDefenderCapValues)) ||
+              Boolean(record.variantResults[0]?.criteria?.infoAndCoordMetrics);
 
         if (!isCompatible) {
           fs.unlinkSync(fullPath);
@@ -486,9 +492,9 @@ export class CampaignManager {
               totalParryAndHSObserved: 0,
               totalTrapsAndSabotagesObserved: 0,
               scoreDistributionByBotLevel: {
-                RANDOM: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                COMBAT_PURE: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                HYBRID_STEALTH_COMBAT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                BLIND: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                SOLO_INFORMED: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                COORD_HYBRID: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
                 OMNISCIENT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
               },
               capturedExtremeLogs: [],
@@ -525,7 +531,7 @@ export class CampaignManager {
   }
 
   // ============================================================================
-  // EXÉCUTION MULTI-CŒURS : BALAYAGE MONTE-CARLO & ABLATION DES 5 LEVIERS
+  // EXÉCUTION MULTI-CŒURS : BALAYAGE MONTE-CARLO & ABLATION DES LEVIERS v3.2
   // ============================================================================
   private async runEvaluationSweepLoop(
     record: CampaignRecord,
@@ -539,8 +545,8 @@ export class CampaignManager {
     const targetG = record.config.gamesPerVariantAndTable;
     const baseSeed = record.config.baseSeed || 42000;
     const chunkSize = Math.max(
-      15,
-      Math.min(50, Math.ceil(targetG / Math.max(1, WORKER_POOL_SIZE)))
+      25,
+      Math.min(250, Math.ceil(targetG / Math.max(1, WORKER_POOL_SIZE)))
     );
 
     for (let vIdx = 0; vIdx < variants.length; vIdx++) {
@@ -664,7 +670,7 @@ export class CampaignManager {
   }
 
   // ============================================================================
-  // EXÉCUTION MULTI-CŒURS : STRESS-TEST LONGUE DURÉE SUR VM ORACLE
+  // EXÉCUTION MULTI-CŒURS : STRESS-TEST LONGUE DURÉE SUR VM ORACLE (v3.2)
   // ============================================================================
   private async runStressTestLoop(record: CampaignRecord): Promise<void> {
     const ctrl = { paused: false, stopped: false, lastSavedAt: Date.now() };
@@ -676,10 +682,10 @@ export class CampaignManager {
       (record.config.baseSeed || 77777) + record.progress.completedGames
     );
     const botLevels: BotProfileId[] = [
-      'HYBRID_STEALTH_COMBAT',
-      'COMBAT_PURE',
+      'COORD_HYBRID',
+      'SOLO_INFORMED',
+      'BLIND',
       'OMNISCIENT',
-      'RANDOM',
     ];
 
     const telemetry = record.stressTelemetry!;
@@ -687,9 +693,9 @@ export class CampaignManager {
       BotProfileId,
       { sumSurv: number; sumLost: number; sumExp: number; defeats: number; miracles: number }
     > = {
-      RANDOM: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      COMBAT_PURE: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      HYBRID_STEALTH_COMBAT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      BLIND: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      SOLO_INFORMED: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      COORD_HYBRID: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
       OMNISCIENT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
     };
 
@@ -707,7 +713,12 @@ export class CampaignManager {
     const maxGames = record.config.maxTotalGames || 100000;
     const maxDurationSec = record.config.targetDurationSeconds || null;
     let nextGameIdx = telemetry.totalGamesSimulated;
-    const gamesPerWorkerBatch = 50;
+    const gamesPerWorkerBatch = 80;
+
+    const caps: TacticalDefenderCap[] = [99, 2, 1];
+    const shifts: CombatThresholdShift[] = [0, 1];
+    const bullActions: BulldozerZeroStumpAction[] = ['NONE', 'DESTROY_TREE'];
+    const presets: TacticsTrackPreset[] = ['ASSAULT_HIGH', 'ASSAULT_LOW'];
 
     while (!ctrl.stopped) {
       if (ctrl.paused) {
@@ -733,17 +744,18 @@ export class CampaignManager {
 
           if (record.config.randomizeParametersInStress) {
             const n = paramRng.nextInt(3, 6);
+            const preset = presets[paramRng.nextInt(0, presets.length - 1)];
             params = {
               numPlayers: n,
               numTurns: paramRng.nextInt(6, 12),
               initialTreesPerCell: paramRng.nextInt(2, 3),
-              tacticsTrackSetup: ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
-              shuffleTacticsTrack: paramRng.nextFloat() < 0.5,
-              staggeredInitialSetup: paramRng.nextFloat() < 0.5,
-              limitStealthTokensToN: paramRng.nextFloat() < 0.5,
-              repairClearsSabotage: paramRng.nextFloat() < 0.5,
-              bulldozerOverflowAbattage: paramRng.nextFloat() < 0.5,
-              activeRepairOnMultiHit: paramRng.nextFloat() < 0.5,
+              tacticsTrackPreset: preset,
+              tacticsTrackSetup: [...TACTICS_TRACK_PRESETS[preset].setup],
+              shuffleTacticsTrack: paramRng.nextFloat() < 0.25,
+              tacticalDefenderCap: caps[paramRng.nextInt(0, caps.length - 1)],
+              combatThresholdShift: shifts[paramRng.nextInt(0, shifts.length - 1)],
+              bulldozerZeroStumpAction: bullActions[paramRng.nextInt(0, bullActions.length - 1)],
+              initialStumpCell2: paramRng.nextFloat() < 0.5,
             };
           } else {
             params = variants[gameIdx % variants.length].params;
@@ -853,21 +865,27 @@ export class CampaignManager {
   }
 
   /**
-   * Génère au premier lancement une campagne de référence v3.1 comparant
-   * a ∈ {2, 3} et l'impact des nouveaux leviers d'équilibrage sur graines appariées.
+   * Génère au premier lancement une campagne de référence v3.2 comparant
+   * les nouveaux leviers de difficulté (Cap, Shift, Bull0, Piste) et mesurant
+   * le Gain d'Info Privée et le Gain de Coordination sur les 4 profils gradués.
    */
   private createInitialReferenceCampaign(): void {
     const config: CampaignConfig = {
-      id: 'camp_ref_v31_five_levers',
-      name: 'Campagne de Référence v3.1 — Étalonnage des 5 Leviers (Setup, MaxN, PurgeSab, BullOver, ActRep)',
+      id: 'camp_ref_v32_info_coord',
+      name: 'Campagne de Référence v3.2 — Leviers de Difficulté & Analyse Connaissance Privée / Coordination',
       type: 'FIVE_LEVERS_ABLATION',
       createdAt: new Date().toISOString(),
-      gamesPerVariantAndTable: 120,
+      gamesPerVariantAndTable: 80,
       sweep: {
-        ...DEFAULT_SWEEP_INPUT,
-        initialTreesPerCellValues: [2, 3],
-        staggeredInitialSetupValues: [false, true],
-        bulldozerOverflowAbattageValues: [false, true],
+        numPlayersValues: [4],
+        numTurnsValues: [8],
+        initialTreesPerCellValues: [2],
+        tacticalDefenderCapValues: [99, 2, 1],
+        combatThresholdShiftValues: [0, 1],
+        bulldozerZeroStumpActionValues: ['NONE', 'DESTROY_TREE'],
+        initialStumpCell2Values: [false],
+        tacticsTrackPresetValues: ['ASSAULT_HIGH', 'ASSAULT_LOW'],
+        shuffleTacticsTrackValues: [false],
       },
       selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
       includeCalibrationTables: true,
@@ -938,7 +956,7 @@ export class CampaignManager {
         totalVariants: variants.length,
         elapsedSeconds: elapsedSec,
         gamesPerSecond: completedGames / elapsedSec,
-        currentPhaseLabel: `Campagne de référence v3.1 prête (${variants.length} variantes × 4 profils de Bots)`,
+        currentPhaseLabel: `Campagne de référence v3.2 prête (${variants.length} variantes × 4 profils gradués)`,
       },
       variantResults,
     };

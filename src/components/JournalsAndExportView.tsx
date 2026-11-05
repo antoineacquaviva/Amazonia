@@ -1,18 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import {
   BotProfileId,
+  BulldozerZeroStumpAction,
   CampaignRecord,
+  CombatThresholdShift,
   SimulationConfig,
   SingleGameResult,
+  TacticalDefenderCap,
+  TacticsTrackPreset,
 } from '../sim/types';
 import {
   BOT_PROFILE_META,
   computeEvilEyeProbabilities,
   DEFAULT_SIMULATION_CONFIG,
-  FIVE_LEVERS_META,
   MASTER_MATRIX_6X6,
   resolveTargetPlayerRank1Based,
   TACTIC_META,
+  TACTICS_TRACK_PRESETS,
 } from '../sim/i18n';
 import { simulateSingleGameTrace } from '../api';
 
@@ -27,12 +31,12 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
   const [numPlayers, setNumPlayers] = useState<number>(4);
   const [numTurns, setNumTurns] = useState<number>(8);
   const [initialTrees, setInitialTrees] = useState<number>(2);
-  const [staggeredSetup, setStaggeredSetup] = useState<boolean>(true);
-  const [limitStealthN, setLimitStealthN] = useState<boolean>(true);
-  const [repairClearsSab, setRepairClearsSab] = useState<boolean>(true);
-  const [bullOverflow, setBullOverflow] = useState<boolean>(true);
-  const [activeRepair31, setActiveRepair31] = useState<boolean>(true);
-  const [botProfile, setBotProfile] = useState<BotProfileId>('HYBRID_STEALTH_COMBAT');
+  const [tacticalCap, setTacticalCap] = useState<TacticalDefenderCap>(2);
+  const [combatShift, setCombatShift] = useState<CombatThresholdShift>(0);
+  const [bullZeroAction, setBullZeroAction] = useState<BulldozerZeroStumpAction>('DESTROY_TREE');
+  const [initialStumpC2, setInitialStumpC2] = useState<boolean>(false);
+  const [trackPreset, setTrackPreset] = useState<TacticsTrackPreset>('ASSAULT_HIGH');
+  const [botProfile, setBotProfile] = useState<BotProfileId>('COORD_HYBRID');
 
   const [simResult, setSimResult] = useState<SingleGameResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -46,12 +50,13 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
         numPlayers,
         numTurns,
         initialTreesPerCell: initialTrees,
+        tacticsTrackPreset: trackPreset,
+        tacticsTrackSetup: [...TACTICS_TRACK_PRESETS[trackPreset].setup],
+        tacticalDefenderCap: tacticalCap,
+        combatThresholdShift: combatShift,
+        bulldozerZeroStumpAction: bullZeroAction,
+        initialStumpCell2: initialStumpC2,
         initialMachinesState: undefined,
-        staggeredInitialSetup: staggeredSetup,
-        limitStealthTokensToN: limitStealthN,
-        repairClearsSabotage: repairClearsSab,
-        bulldozerOverflowAbattage: bullOverflow,
-        activeRepairOnMultiHit: activeRepair31,
       };
       const res = await simulateSingleGameTrace({
         seed,
@@ -78,28 +83,19 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
     { m: 6, cases: 1, pct: (1 / 36) * 100 },
   ];
 
-  const leverValuesMap: Record<
-    (typeof FIVE_LEVERS_META)[number]['key'],
-    { val: boolean; setVal: (v: boolean) => void }
-  > = {
-    staggeredInitialSetup: { val: staggeredSetup, setVal: setStaggeredSetup },
-    limitStealthTokensToN: { val: limitStealthN, setVal: setLimitStealthN },
-    repairClearsSabotage: { val: repairClearsSab, setVal: setRepairClearsSab },
-    bulldozerOverflowAbattage: { val: bullOverflow, setVal: setBullOverflow },
-    activeRepairOnMultiHit: { val: activeRepair31, setVal: setActiveRepair31 },
-  };
+  const activeTrackCards = TACTICS_TRACK_PRESETS[trackPreset].setup;
 
   return (
     <div className="space-y-6">
-      {/* SECTION 1 : SIMULATEUR UNITAIRE & COMBAT LOG COMPLET */}
+      {/* SECTION 1 : SIMULATEUR UNITAIRE & COMBAT LOG COMPLET v3.2 */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              1. Inspecteur de Partie Unitaire & Journal de Combat (« Combat Log » v3.1)
+              1. Inspecteur de Partie Unitaire & Journal de Combat (« Combat Log » v3.2)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Simulez une graine précise avec les 5 nouveaux leviers d'équilibrage et inspectez chaque phase (2D6, Défenseurs, réparation active 3.1, BullOver, réserve MaxN et purge Sabotage).
+              Simulez une graine précise avec les 4 profils gradués (Aveugle, Solo, Coordonné, Omniscient) et les leviers v3.2 (Plafond Cap, Shift, Bull0, StumpC2, Piste).
             </p>
           </div>
 
@@ -173,14 +169,14 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Profil de Bot
+              Profil Gradué de Bot
             </label>
             <select
               value={botProfile}
               onChange={(e) => setBotProfile(e.target.value as BotProfileId)}
               className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              {(['HYBRID_STEALTH_COMBAT', 'COMBAT_PURE', 'RANDOM', 'OMNISCIENT'] as const).map(
+              {(['COORD_HYBRID', 'SOLO_INFORMED', 'BLIND', 'OMNISCIENT'] as const).map(
                 (b) => (
                   <option key={b} value={b}>
                     {BOT_PROFILE_META[b].shortLabel}
@@ -191,30 +187,80 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
           </div>
         </div>
 
-        {/* Interrupteurs des 5 leviers */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 mt-3">
-          {FIVE_LEVERS_META.map((lv) => {
-            const state = leverValuesMap[lv.key];
-            return (
-              <label
-                key={lv.key}
-                className="flex items-center justify-between p-2.5 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50 cursor-pointer text-xs"
-              >
-                <span className="font-medium text-slate-800 dark:text-slate-200">
-                  <strong className="font-mono text-emerald-700 dark:text-emerald-400">
-                    {lv.shortCode}
-                  </strong>{' '}
-                  · {lv.title.split('(')[0]}
-                </span>
-                <input
-                  type="checkbox"
-                  checked={state.val}
-                  onChange={(e) => state.setVal(e.target.checked)}
-                  className="rounded border-slate-300 ml-2"
-                />
-              </label>
-            );
-          })}
+        {/* Contrôles des 5 leviers v3.2 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mt-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Plafond Tactique (Cap)
+            </label>
+            <select
+              value={tacticalCap}
+              onChange={(e) => setTacticalCap(Number(e.target.value) as TacticalDefenderCap)}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              <option value={99}>Cap = 99 (Illimité)</option>
+              <option value={2}>Cap = 2 (Max 2/case)</option>
+              <option value={1}>Cap = 1 (Max 1/case)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Durcissement Seuils (Shift)
+            </label>
+            <select
+              value={combatShift}
+              onChange={(e) => setCombatShift(Number(e.target.value) as CombatThresholdShift)}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              <option value={0}>Shift +0 (Seuils 1/2/3)</option>
+              <option value={1}>Shift +1 (Seuils 2/3/4)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Bulldozer 0 Souche (Bull0)
+            </label>
+            <select
+              value={bullZeroAction}
+              onChange={(e) =>
+                setBullZeroAction(e.target.value as BulldozerZeroStumpAction)
+              }
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              <option value="NONE">NONE (Aucun effet)</option>
+              <option value="DESTROY_TREE">DESTROY_TREE (-1 Arbre)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Preset Piste des Tactiques
+            </label>
+            <select
+              value={trackPreset}
+              onChange={(e) => setTrackPreset(e.target.value as TacticsTrackPreset)}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
+            >
+              <option value="ASSAULT_HIGH">ASSAULT_HIGH [A3,B3,A2,B2,A1,B1]</option>
+              <option value="ASSAULT_LOW">ASSAULT_LOW [A1,B1,A2,B2,A3,B3]</option>
+            </select>
+          </div>
+
+          <div className="flex items-end">
+            <label className="w-full flex items-center justify-between px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 cursor-pointer text-xs">
+              <span className="font-medium text-slate-800 dark:text-slate-200">
+                Souche C2 J1/J2 (<code>StumpC2</code>)
+              </span>
+              <input
+                type="checkbox"
+                checked={initialStumpC2}
+                onChange={(e) => setInitialStumpC2(e.target.checked)}
+                className="rounded border-slate-300 ml-2"
+              />
+            </label>
+          </div>
         </div>
 
         {/* Résumé chiffré + Journal de Combat */}
@@ -234,9 +280,9 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Abattages (BullOver)</div>
+                <div className="text-[11px] text-slate-500">Abattages (Bull0Arb)</div>
                 <div className="text-sm font-bold font-mono">
-                  {simResult.cutsCount} ({simResult.bulldozerOverflowCutsCount})
+                  {simResult.cutsCount} ({simResult.bulldozerDestroyedTreesCount})
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
@@ -258,9 +304,9 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Pièges / Sabotages</div>
-                <div className="text-sm font-bold font-mono">
-                  {simResult.trapsPlacedCount} / {simResult.sabotagesPlacedCount}
+                <div className="text-[11px] text-slate-500">Furt. Orpheline / Overkill</div>
+                <div className="text-sm font-bold font-mono text-amber-700 dark:text-amber-400">
+                  {simResult.orphanStealthTokensCount} / {simResult.tacticalOverkillTokensCount}
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
@@ -386,18 +432,18 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
 
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
-              Distribution de la Piste des Tactiques M = min(d1, d2)
+              Distribution de la Piste des Tactiques M = min(d1, d2) ({trackPreset})
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 tabular-nums text-xs">
               {min2D6Odds.map((od) => {
-                const defaultTac = DEFAULT_SIMULATION_CONFIG.tacticsTrackSetup[od.m - 1];
+                const tac = activeTrackCards[od.m - 1];
                 return (
                   <div
                     key={od.m}
                     className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                   >
                     <div className="font-bold text-slate-900 dark:text-slate-100">
-                      Case M={od.m} ({defaultTac} — {TACTIC_META[defaultTac].name})
+                      Case M={od.m} ({tac} — {TACTIC_META[tac].name})
                     </div>
                     <div className="font-mono text-amber-700 dark:text-amber-400">
                       {od.cases} / 36 ({od.pct.toFixed(2)} %)

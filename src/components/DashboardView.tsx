@@ -6,7 +6,6 @@ import {
 } from '../sim/types';
 import {
   computeEvilEyeProbabilities,
-  FIVE_LEVERS_META,
   VICTORY_BRACKET_LABELS,
 } from '../sim/i18n';
 import {
@@ -32,7 +31,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateToBuilder,
 }) => {
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
-  const [selectedTableId, setSelectedTableId] = useState<string>('TABLE_HYBRID');
+  const [selectedTableId, setSelectedTableId] = useState<string>('TABLE_COORD');
 
   const evaluationCampaigns = useMemo(
     () => campaigns.filter((c) => c.config.type !== 'ORACLE_STRESS_TEST'),
@@ -73,7 +72,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     );
     return (
       found ||
-      selectedVariant.tableSummaries.find((t) => t.tableConfigId === 'TABLE_HYBRID') ||
+      selectedVariant.tableSummaries.find((t) => t.tableConfigId === 'TABLE_COORD') ||
       selectedVariant.tableSummaries[0]
     );
   }, [selectedVariant, selectedTableId]);
@@ -87,16 +86,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-10 text-center">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
-          Aucune campagne Monte-Carlo disponible
+          Aucune campagne Monte-Carlo v3.2 disponible
         </h2>
         <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
-          Configurez et lancez une campagne de simulation ou une ablation des 5 leviers d'équilibrage v3.1.
+          Configurez et lancez une campagne de simulation v3.2 sur les leviers de difficulté et la connaissance privée.
         </p>
         <button
           onClick={onNavigateToBuilder}
           className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-medium rounded-md transition-colors cursor-pointer"
         >
-          Configurer une Campagne Monte-Carlo
+          Configurer une Campagne Monte-Carlo v3.2
         </button>
       </div>
     );
@@ -207,15 +206,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         )}
       </div>
 
-      {/* SECTION 1 : TABLEAU COMPARATIF DES VARIANTES & DES 5 LEVIERS */}
+      {/* SECTION 1 : TABLEAU COMPARATIF DES VARIANTES v3.2 & CONNAISSANCE PRIVÉE / COORDINATION */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              1. Classement des Variantes & État des 5 Leviers d'Équilibrage (Setup, MaxN, PurgeSab, BullOver, ActRep)
+              1. Classement des Variantes v3.2 — Leviers de Difficulté & Analyse Connaissance Privée / Coordination
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Options figées en dur : D2-Double (Surchauffe & Assaut incluent l'action de base), CumulA2=Oui, Régénération fin de partie=Oui. Cliquez sur une ligne pour l'inspecter.
+              Règles figées : D2-Double, CumulA2, Régén, ActRep (3.1), PurgeSab, MaxN, Départ Case 1. Cible de survie Coordonnée : 70 % – 82 %. Cliquez sur une ligne pour l'inspecter.
             </p>
           </div>
           <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
@@ -228,30 +227,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
                 <th className="py-2.5 px-3">ID</th>
-                <th className="py-2.5 px-3">Variante & 5 Leviers</th>
+                <th className="py-2.5 px-3">Variante & Leviers v3.2</th>
                 <th className="py-2.5 px-3 text-right">Note Design</th>
-                <th className="py-2.5 px-3 text-right">Survie (Hybride)</th>
-                <th className="py-2.5 px-3 text-right">Arbres Perdus (Moy ± σ)</th>
-                <th className="py-2.5 px-3 text-right">Abattages (BullOver)</th>
-                <th className="py-2.5 px-3 text-right">Terrassements</th>
-                <th className="py-2.5 px-3 text-right">Surchauffes</th>
-                <th className="py-2.5 px-3 text-right">Assauts</th>
-                <th className="py-2.5 px-3 text-right">Parades S=2+k</th>
-                <th className="py-2.5 px-3 text-right">Mises HS S≥3+k</th>
-                <th className="py-2.5 px-3 text-right">Explosions</th>
-                <th className="py-2.5 px-3 text-right">Pièges + Sab.</th>
-                <th className="py-2.5 px-3 text-right">Réparations (Act. 3.1)</th>
+                <th className="py-2.5 px-3 text-right">Survie Aveugle</th>
+                <th className="py-2.5 px-3 text-right">Survie Solo</th>
+                <th className="py-2.5 px-3 text-right">Survie Coord</th>
+                <th className="py-2.5 px-3 text-right">Survie Omni</th>
+                <th className="py-2.5 px-3 text-right">Gain Info Privée</th>
+                <th className="py-2.5 px-3 text-right">Gain Coordination</th>
+                <th className="py-2.5 px-3 text-right">Coût Brouillard</th>
+                <th className="py-2.5 px-3 text-right">Arbres Perdus (Coord)</th>
+                <th className="py-2.5 px-3 text-right">Furt. Orpheline</th>
+                <th className="py-2.5 px-3 text-right">Overkill Tact.</th>
+                <th className="py-2.5 px-3 text-right">Mises HS / Expl.</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
               {sortedVariants.map((v) => {
                 const isSelected = selectedVariant?.variantId === v.variantId;
                 const mainTable =
-                  v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_HYBRID') ||
-                  v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_COMBAT_PURE') ||
+                  v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_COORD') ||
                   v.tableSummaries[0];
 
                 if (!mainTable) return null;
+                const ic = v.criteria.infoAndCoordMetrics;
+                const capStr = v.params.tacticalDefenderCap >= 99 ? '∞' : String(v.params.tacticalDefenderCap);
+                const shiftStr = `+${v.params.combatThresholdShift}`;
+                const bullStr = v.params.bulldozerZeroStumpAction === 'DESTROY_TREE' ? '-1Arb' : '0';
+                const pStr = v.params.tacticsTrackPreset === 'ASSAULT_HIGH' ? 'A3B3↑' : 'A1B1↑';
 
                 return (
                   <tr
@@ -271,61 +274,85 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         N={v.params.numPlayers} · X={v.params.numTurns}t · a={v.params.initialTreesPerCell}
                       </div>
                       <div className="flex flex-wrap gap-1 mt-1">
-                        {FIVE_LEVERS_META.map((lv) => {
-                          const enabled = v.params[lv.key];
-                          return (
-                            <span
-                              key={lv.key}
-                              className={`px-1.5 py-0.5 text-[10px] font-mono rounded border ${
-                                enabled
-                                  ? 'bg-emerald-100/70 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-                              }`}
-                            >
-                              {lv.shortCode}:{enabled ? 'Oui' : 'Non'}
-                            </span>
-                          );
-                        })}
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700">
+                          Cap:{capStr}
+                        </span>
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700">
+                          Shift:{shiftStr}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 text-[10px] font-mono rounded border ${
+                            v.params.bulldozerZeroStumpAction === 'DESTROY_TREE'
+                              ? 'bg-amber-100/70 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                          }`}
+                        >
+                          Bull0:{bullStr}
+                        </span>
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-emerald-100/70 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700">
+                          Piste:{pStr}
+                        </span>
+                        {v.params.initialStumpCell2 && (
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-sky-100/70 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-700">
+                            StumpC2:Oui
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="py-2.5 px-3 text-right font-bold text-slate-900 dark:text-slate-100">
                       {v.criteria.overallDesignScore} / 100
                     </td>
+                    <td className="py-2.5 px-3 text-right text-slate-500 dark:text-slate-400">
+                      {(ic.survBlind * 100).toFixed(1)} %
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-sky-700 dark:text-sky-400">
+                      {(ic.survSolo * 100).toFixed(1)} %
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-bold text-emerald-700 dark:text-emerald-400">
+                      {(ic.survCoord * 100).toFixed(1)} %
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300">
+                      {(ic.survOmni * 100).toFixed(1)} %
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-semibold text-sky-700 dark:text-sky-400">
+                      {ic.privateInfoGainPct >= 0 ? '+' : ''}
+                      {(ic.privateInfoGainPct * 100).toFixed(1)} pts{' '}
+                      <span className="text-[10px] font-normal text-slate-400">
+                        ({ic.privateInfoGainTrees >= 0 ? '+' : ''}
+                        {ic.privateInfoGainTrees.toFixed(1)} a.)
+                      </span>
+                    </td>
                     <td className="py-2.5 px-3 text-right font-semibold text-emerald-700 dark:text-emerald-400">
-                      {(mainTable.meanSurvivalRateHorizon * 100).toFixed(1)} %
+                      {ic.coordinationGainPct >= 0 ? '+' : ''}
+                      {(ic.coordinationGainPct * 100).toFixed(1)} pts{' '}
+                      <span className="text-[10px] font-normal text-slate-400">
+                        ({ic.coordinationGainTrees >= 0 ? '+' : ''}
+                        {ic.coordinationGainTrees.toFixed(1)} a.)
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-amber-700 dark:text-amber-400">
+                      {ic.fogOfWarCostPct >= 0 ? '+' : ''}
+                      {(ic.fogOfWarCostPct * 100).toFixed(1)} pts
                     </td>
                     <td className="py-2.5 px-3 text-right text-slate-800 dark:text-slate-200">
                       {mainTable.meanTreesLostTotal.toFixed(2)} ± {mainTable.stdDevTreesLostTotal.toFixed(2)}
                     </td>
-                    <td className="py-2.5 px-3 text-right">
-                      {mainTable.meanCuts.toFixed(2)}{' '}
-                      <span className="text-[11px] text-slate-400">
-                        ({(mainTable.meanBulldozerOverflowCuts ?? 0).toFixed(1)})
+                    <td className="py-2.5 px-3 text-right text-amber-700 dark:text-amber-400">
+                      {ic.meanOrphanStealthCoord.toFixed(2)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right text-slate-500">
+                      {ic.meanTacticalOverkillCoord.toFixed(2)}{' '}
+                      <span className="text-[10px] text-slate-400">
+                        (Solo:{ic.meanTacticalOverkillSolo.toFixed(1)})
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-right">
-                      {mainTable.meanClearings.toFixed(2)} ({mainTable.meanStumpsCleared.toFixed(1)} s.)
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-amber-700 dark:text-amber-400">
-                      {mainTable.meanOverheats.toFixed(2)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right">{mainTable.meanAssaults.toFixed(2)}</td>
-                    <td className="py-2.5 px-3 text-right text-sky-700 dark:text-sky-400">
-                      {mainTable.meanSimpleParries.toFixed(2)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-emerald-700 dark:text-emerald-400 font-semibold">
-                      {mainTable.meanParryAndHS.toFixed(2)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-rose-700 dark:text-rose-400 font-semibold">
-                      {mainTable.meanExplosions.toFixed(2)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right">
-                      {(mainTable.meanTrapsPlaced + mainTable.meanSabotagesPlaced).toFixed(2)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right">
-                      {mainTable.meanRepairs.toFixed(2)}{' '}
-                      <span className="text-[11px] text-slate-400">
-                        ({(mainTable.meanActiveRepairsStep31 ?? 0).toFixed(1)})
+                      <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                        {mainTable.meanParryAndHS.toFixed(1)}
+                      </span>{' '}
+                      /{' '}
+                      <span className="text-rose-700 dark:text-rose-400">
+                        {mainTable.meanExplosions.toFixed(1)}
                       </span>
                     </td>
                   </tr>
@@ -350,7 +377,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   {selectedVariant.variantLabel}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Options D2-Double & CumulA2 & Régénération actives · Horizon de référence :{' '}
+                  Piste des Tactiques :{' '}
+                  <span className="font-mono font-semibold">
+                    [{selectedVariant.params.tacticsTrackSetup.join(', ')}]
+                  </span>{' '}
+                  · Horizon de référence :{' '}
                   <span className="font-mono font-semibold">
                     N×X×a = {selectedVariant.params.numPlayers * selectedVariant.params.numTurns * selectedVariant.params.initialTreesPerCell} arbres
                   </span>
@@ -377,26 +408,84 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             </div>
 
+            {/* BANDEAU CONNAISSANCE PRIVÉE & COORDINATION (4 Profils Gradués) */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4 tabular-nums">
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">1. Bot Aveugle (Sans tirage)</div>
+                <div className="text-base font-bold font-mono text-slate-700 dark:text-slate-300 mt-0.5">
+                  {(selectedVariant.criteria.infoAndCoordMetrics.survBlind * 100).toFixed(1)} %
+                </div>
+              </div>
+              <div className="p-3 rounded bg-sky-50/60 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
+                <div className="text-[11px] text-sky-800 dark:text-sky-300">
+                  2. Bot Informé Solo (+Info Privée)
+                </div>
+                <div className="text-base font-bold font-mono text-sky-700 dark:text-sky-400 mt-0.5">
+                  {(selectedVariant.criteria.infoAndCoordMetrics.survSolo * 100).toFixed(1)} %{' '}
+                  <span className="text-xs font-normal">
+                    ({selectedVariant.criteria.infoAndCoordMetrics.privateInfoGainPct >= 0 ? '+' : ''}
+                    {(selectedVariant.criteria.infoAndCoordMetrics.privateInfoGainPct * 100).toFixed(1)} pts)
+                  </span>
+                </div>
+              </div>
+              <div className="p-3 rounded bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                <div className="text-[11px] text-emerald-800 dark:text-emerald-300">
+                  3. Bot Coordonné (+Coordination)
+                </div>
+                <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
+                  {(selectedVariant.criteria.infoAndCoordMetrics.survCoord * 100).toFixed(1)} %{' '}
+                  <span className="text-xs font-normal">
+                    ({selectedVariant.criteria.infoAndCoordMetrics.coordinationGainPct >= 0 ? '+' : ''}
+                    {(selectedVariant.criteria.infoAndCoordMetrics.coordinationGainPct * 100).toFixed(1)} pts)
+                  </span>
+                </div>
+              </div>
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">4. Bot Omniscient (Plafond)</div>
+                <div className="text-base font-bold font-mono text-slate-800 dark:text-slate-200 mt-0.5">
+                  {(selectedVariant.criteria.infoAndCoordMetrics.survOmni * 100).toFixed(1)} %{' '}
+                  <span className="text-xs font-normal text-amber-600">
+                    (Brouillard: {(selectedVariant.criteria.infoAndCoordMetrics.fogOfWarCostPct * 100).toFixed(1)} pts)
+                  </span>
+                </div>
+              </div>
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Furtivité Orpheline (Coord)</div>
+                <div className="text-base font-bold font-mono text-amber-700 dark:text-amber-400 mt-0.5">
+                  {selectedVariant.criteria.infoAndCoordMetrics.meanOrphanStealthCoord.toFixed(2)} jetons/p.
+                </div>
+              </div>
+              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Overkill Tactique (Coord vs Solo)</div>
+                <div className="text-base font-bold font-mono text-slate-700 dark:text-slate-300 mt-0.5">
+                  {selectedVariant.criteria.infoAndCoordMetrics.meanTacticalOverkillCoord.toFixed(2)}{' '}
+                  <span className="text-xs font-normal text-slate-400">
+                    vs {selectedVariant.criteria.infoAndCoordMetrics.meanTacticalOverkillSolo.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             {/* Les 4 Critères d'Équilibrage Game Design (/100) */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
               <div className="p-3.5 rounded-md bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    1. Intérêt Stratégique & Furtivité
+                    1. Valeur de la Connaissance Privée
                   </span>
                   <span className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
-                    {selectedVariant.criteria.strategicAndStealthSynergy.score}/100
+                    {selectedVariant.criteria.privateInfoValue.score}/100
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                  {selectedVariant.criteria.strategicAndStealthSynergy.interpretation}
+                  {selectedVariant.criteria.privateInfoValue.interpretation}
                 </p>
               </div>
 
               <div className="p-3.5 rounded-md bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    2. Tension & Courbe d'Attrition
+                    2. Tension & Cible [70% – 82%]
                   </span>
                   <span className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
                     {selectedVariant.criteria.tensionAndAttrition.score}/100
@@ -410,7 +499,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="p-3.5 rounded-md bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    3. Efficacité Seuils S & Parades
+                    3. Efficacité Seuils S & Furtivité
                   </span>
                   <span className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
                     {selectedVariant.criteria.coordinationEfficiency.score}/100
@@ -556,24 +645,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          {/* C. Fréquence moyenne des événements de Combat, Surchauffe, Assaut, Parade & Furtivité */}
+          {/* C. Fréquence moyenne des événements de Combat, Furtivité & Leviers v3.2 */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
             <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-              C. Fréquence Moyenne par Partie des Événements de Combat, Furtivité & Nouveaux Leviers v3.1
+              C. Fréquence Moyenne par Partie des Événements de Combat, Furtivité & Leviers v3.2
             </h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
               Mesures moyennes par partie sur {activeTableSummary.gamesCount} simulations ({activeTableSummary.tableConfigName}).
             </p>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 tabular-nums">
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Abattages Totaux (dont BullOver)
+                  Abattages (Arbres détruits Bull0)
                 </div>
                 <div className="text-base font-bold font-mono text-slate-900 dark:text-slate-100 mt-0.5">
                   {activeTableSummary.meanCuts.toFixed(2)}{' '}
-                  <span className="text-xs font-normal text-emerald-700 dark:text-emerald-400">
-                    ({(activeTableSummary.meanBulldozerOverflowCuts ?? 0).toFixed(2)})
+                  <span className="text-xs font-normal text-amber-700 dark:text-amber-400">
+                    ({(activeTableSummary.meanBulldozerDestroyedTrees ?? 0).toFixed(2)} détr.)
                   </span>
                 </div>
               </div>
@@ -613,7 +702,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Parades Simples (S = 2 + k)
+                  Parades Simples (S = 2+k+shift)
                 </div>
                 <div className="text-base font-bold font-mono text-sky-700 dark:text-sky-400 mt-0.5">
                   {activeTableSummary.meanSimpleParries.toFixed(2)}
@@ -622,7 +711,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Mises HS Défensives (S ≥ 3 + k)
+                  Mises HS Défensives (S ≥ 3+k+shift)
                 </div>
                 <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
                   {activeTableSummary.meanParryAndHS.toFixed(2)}
@@ -647,6 +736,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="text-xs font-normal text-amber-600 dark:text-amber-400">
                     ({(activeTableSummary.meanStealthBlockedByLimit ?? 0).toFixed(2)} bloq.)
                   </span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Furtivité Orpheline (1 jeton perdu)
+                </div>
+                <div className="text-base font-bold font-mono text-amber-700 dark:text-amber-400 mt-0.5">
+                  {(activeTableSummary.meanOrphanStealthTokens ?? 0).toFixed(2)}
+                </div>
+              </div>
+
+              <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Overkill Tactique (Jetons en surplus)
+                </div>
+                <div className="text-base font-bold font-mono text-slate-700 dark:text-slate-300 mt-0.5">
+                  {(activeTableSummary.meanTacticalOverkillTokens ?? 0).toFixed(2)}
                 </div>
               </div>
 

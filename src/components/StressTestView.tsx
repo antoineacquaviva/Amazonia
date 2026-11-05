@@ -32,7 +32,7 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
   onDeleteCampaign,
   isSubmitting,
 }) => {
-  const [maxGames, setMaxGames] = useState<number>(50000);
+  const [maxGames, setMaxGames] = useState<number>(100000);
   const [randomizeParams, setRandomizeParams] = useState<boolean>(true);
   const [selectedLogIdx, setSelectedLogIdx] = useState<number>(0);
 
@@ -50,7 +50,7 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
 
   const handleLaunchStress = async () => {
     await onStartCampaign({
-      name: `Stress-Test Multi-Cœurs (${maxGames.toLocaleString('fr-FR')} parties)`,
+      name: `Stress-Test Multi-Cœurs v3.2 (${maxGames.toLocaleString('fr-FR')} parties)`,
       type: 'ORACLE_STRESS_TEST',
       maxTotalGames: maxGames,
       randomizeParametersInStress: randomizeParams,
@@ -61,9 +61,9 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
 
   const telemetry = currentStress?.stressTelemetry;
   const botKeys: BotProfileId[] = [
-    'RANDOM',
-    'COMBAT_PURE',
-    'HYBRID_STEALTH_COMBAT',
+    'BLIND',
+    'SOLO_INFORMED',
+    'COORD_HYBRID',
     'OMNISCIENT',
   ];
 
@@ -74,10 +74,10 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              Stress-Test Multi-Cœurs & Vérificateur d'Invariants (I1..I4)
+              Stress-Test Multi-Cœurs v3.2 & Vérificateur d'Invariants (I1..I4)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Exécute des dizaines de milliers de parties en parallèle sur les workers de la VM Oracle pour détecter les cas extrêmes (doubles explosions, défaites omniscientes, synergies furtives).
+              Exécute des centaines de milliers de parties en parallèle sur les workers de la VM Oracle avec fuzzing des nouveaux leviers v3.2 (Cap, Shift, Bull0, StumpC2, Piste) et comparaison des 4 profils d'IA.
             </p>
           </div>
 
@@ -91,11 +91,11 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
                 onChange={(e) => setMaxGames(Number(e.target.value))}
                 className="px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
               >
-                <option value={5000}>5 000 parties</option>
                 <option value={25000}>25 000 parties</option>
-                <option value={50000}>50 000 parties</option>
                 <option value={100000}>100 000 parties</option>
                 <option value={250000}>250 000 parties</option>
+                <option value={500000}>500 000 parties</option>
+                <option value={1000000}>1 000 000 parties</option>
               </select>
             </div>
 
@@ -106,7 +106,7 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
                 onChange={(e) => setRandomizeParams(e.target.checked)}
                 className="rounded border-slate-300"
               />
-              Fuzzing aléatoire ($N, X, a$, D1/D2, états initiaux)
+              Fuzzing aléatoire (N, X, a, Cap, Shift, Bull0, Piste)
             </label>
 
             <button
@@ -247,7 +247,7 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
           {/* Distribution par niveau de Bot */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">
-              Performance Comparée des 4 Profils de Bots sous Stress-Test
+              Performance Comparée des 4 Profils Gradués de Bots sous Stress-Test
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs tabular-nums">

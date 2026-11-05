@@ -4,32 +4,61 @@ import {
   ParameterSweepInput,
   SimulationConfig,
   TableConfig,
+  TacticsTrackPreset,
   TacticType,
   VictoryBracket,
 } from './types';
 
+export const TACTICS_TRACK_PRESETS: Record<
+  TacticsTrackPreset,
+  {
+    id: TacticsTrackPreset;
+    shortLabel: string;
+    label: string;
+    setup: TacticType[];
+    description: string;
+  }
+> = {
+  ASSAULT_HIGH: {
+    id: 'ASSAULT_HIGH',
+    shortLabel: 'ASSAULT_HIGH',
+    label: 'ASSAULT_HIGH — Assauts fréquents sur petits dés [A3, B3, A2, B2, A1, B1]',
+    setup: ['A3', 'B3', 'A2', 'B2', 'A1', 'B1'],
+    description:
+      'Assauts A3/B3 placés sur M=1 et M=2 (20 chances sur 36) : forte pression sur les seuils S et risque élevé d’explosion.',
+  },
+  ASSAULT_LOW: {
+    id: 'ASSAULT_LOW',
+    shortLabel: 'ASSAULT_LOW',
+    label: 'ASSAULT_LOW — Assauts rares sur gros dés [A1, B1, A2, B2, A3, B3]',
+    setup: ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
+    description:
+      'Actions standard A1/B1 placées sur M=1 et M=2 ; Assauts A3/B3 réservés aux gros dés M=5 et M=6 (4 chances sur 36).',
+  },
+};
+
 export const DEFAULT_TACTICS_TRACK: TacticType[] = [
-  'A1',
-  'B1',
-  'A2',
-  'B2',
-  'A3',
-  'B3',
+  ...TACTICS_TRACK_PRESETS.ASSAULT_HIGH.setup,
 ];
+
+export function resolveTacticsTrackFromPreset(
+  preset: TacticsTrackPreset
+): TacticType[] {
+  return [...(TACTICS_TRACK_PRESETS[preset]?.setup ?? TACTICS_TRACK_PRESETS.ASSAULT_HIGH.setup)];
+}
 
 export function createDefaultMachinesState(
   numPlayers: number,
-  staggeredInitialSetup: boolean = true,
   harvesterStatus: 'NORMAL' | 'HS' = 'NORMAL',
   bulldozerStatus: 'NORMAL' | 'HS' = 'NORMAL',
   initialStumpsCell1 = 0
 ): InitialMachineConfig[] {
   return Array.from({ length: numPlayers }, () => ({
-    harvesterPos: staggeredInitialSetup ? 2 : 1,
-    harvesterStatus: staggeredInitialSetup ? 'NORMAL' : harvesterStatus,
+    harvesterPos: 1,
+    harvesterStatus,
     bulldozerPos: 1,
-    bulldozerStatus: staggeredInitialSetup ? 'NORMAL' : bulldozerStatus,
-    initialStumpsCell1: staggeredInitialSetup ? 1 : initialStumpsCell1,
+    bulldozerStatus,
+    initialStumpsCell1,
   }));
 }
 
@@ -37,79 +66,30 @@ export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = {
   numPlayers: 4,
   numTurns: 8,
   initialTreesPerCell: 2,
-  tacticsTrackSetup: [...DEFAULT_TACTICS_TRACK],
+  tacticsTrackPreset: 'ASSAULT_HIGH',
+  tacticsTrackSetup: resolveTacticsTrackFromPreset('ASSAULT_HIGH'),
   shuffleTacticsTrack: false,
-  initialMachinesState: createDefaultMachinesState(4, true),
-  staggeredInitialSetup: true,
-  limitStealthTokensToN: true,
-  repairClearsSabotage: true,
-  bulldozerOverflowAbattage: true,
-  activeRepairOnMultiHit: true,
+  tacticalDefenderCap: 2,
+  combatThresholdShift: 0,
+  bulldozerZeroStumpAction: 'DESTROY_TREE',
+  initialStumpCell2: true,
 };
 
+/**
+ * Configuration par défaut la plus ambitieuse et exhaustive pour le Sweep Monte-Carlo v3.2
+ * 4 (N) × 6 (X) × 2 (a) × 3 (Cap) × 2 (Shift) × 2 (Bull0) × 2 (StumpC2) × 2 (Preset) = 2 304 variantes
+ */
 export const DEFAULT_SWEEP_INPUT: ParameterSweepInput = {
-  numPlayersValues: [4],
-  numTurnsValues: [8],
-  initialTreesPerCellValues: [2],
+  numPlayersValues: [3, 4, 5, 6],
+  numTurnsValues: [6, 7, 8, 9, 10, 12],
+  initialTreesPerCellValues: [2, 3],
+  tacticalDefenderCapValues: [99, 2, 1],
+  combatThresholdShiftValues: [0, 1],
+  bulldozerZeroStumpActionValues: ['NONE', 'DESTROY_TREE'],
+  initialStumpCell2Values: [false, true],
+  tacticsTrackPresetValues: ['ASSAULT_HIGH', 'ASSAULT_LOW'],
   shuffleTacticsTrackValues: [false],
-  tacticsTrackSetup: [...DEFAULT_TACTICS_TRACK],
-  staggeredInitialSetupValues: [true],
-  limitStealthTokensToNValues: [true],
-  repairClearsSabotageValues: [true],
-  bulldozerOverflowAbattageValues: [true],
-  activeRepairOnMultiHitValues: [true],
-  initialHarvesterStatus: 'NORMAL',
-  initialBulldozerStatus: 'NORMAL',
-  initialStumpsCell1: 0,
 };
-
-export const FIVE_LEVERS_META = [
-  {
-    key: 'staggeredInitialSetup' as const,
-    shortCode: 'Setup',
-    title: '1. Décalage initial & souches au départ (staggeredInitialSetup)',
-    trueLabel: 'Décalé (A en c=2, B en c=1, 1 souche en c=1..2)',
-    falseLabel: 'Classique (A et B en c=1, 0 souche)',
-    description:
-      'Si true : Abatteuse en case 2 (NORMAL), Bulldozer en case 1 (NORMAL), cases 1 et 2 à 1 souche + (a-1) arbre(s) debout.',
-  },
-  {
-    key: 'limitStealthTokensToN' as const,
-    shortCode: 'MaxN',
-    title: '2. Réserve globale limitée à N jetons Furtivité (limitStealthTokensToN)',
-    trueLabel: 'Limitée à N jetons (Pièges + Sabotages ≤ N)',
-    falseLabel: 'Illimitée',
-    description:
-      'Si true : sum(hasTrap) + sum(hasSabotage) ≤ N. En cas de double Sabotage avec 1 seul jeton restant, sabote prioritairement l’Abatteuse.',
-  },
-  {
-    key: 'repairClearsSabotage' as const,
-    shortCode: 'PurgeSab',
-    title: '3. Sabotage éphémère sur réparation (repairClearsSabotage)',
-    trueLabel: 'Actif (Réparation retire le Sabotage)',
-    falseLabel: 'Inactif (Sabotage conservé après réparation)',
-    description:
-      'Si true : toute machine HS réparée (en Étape 3.1 ou Étape 3.4) perd immédiatement son jeton Sabotage.',
-  },
-  {
-    key: 'bulldozerOverflowAbattage' as const,
-    shortCode: 'BullOver',
-    title: '4. Débordement du Bulldozer en Abattage (bulldozerOverflowAbattage)',
-    trueLabel: 'Actif (Terrassement sur 0 souche → 1 Abattage)',
-    falseLabel: 'Inactif (Terrassement sur 0 souche sans effet)',
-    description:
-      'Si true : lors du Terrassement (n_actionsB ≥ 1), s’il n’y a aucune souche sur la case, la 1re action coupe 1 arbre debout en souche.',
-  },
-  {
-    key: 'activeRepairOnMultiHit' as const,
-    shortCode: 'ActRep',
-    title: '5. Réparation active immédiate sur cumul (activeRepairOnMultiHit)',
-    trueLabel: 'Actif (m ≥ 2 cartes sur HS → répare + avance en p+1)',
-    falseLabel: 'Inactif (toutes les cartes en faceDown sur p)',
-    description:
-      'Si true : si une machine HS reçoit m ≥ 2 cartes à l’Étape 3.1, la 1re carte la répare immédiatement et elle avance en p+1 avec m-1 cartes face visible.',
-  },
-];
 
 export const VICTORY_BRACKET_LABELS: Record<
   VictoryBracket,
@@ -173,7 +153,7 @@ export const TACTIC_META: Record<
     machine: 'B',
     category: 'BASE',
     description:
-      'Le Bulldozer avance (si NORMAL) et rase toutes les Souches de la case (ou abat 1 arbre si 0 souche avec BullOver).',
+      'Le Bulldozer avance (si NORMAL) et rase toutes les Souches de la case (ou détruit 1 arbre debout si 0 souche avec DESTROY_TREE).',
   },
   B2: {
     code: 'B2',
@@ -203,67 +183,67 @@ export const BOT_PROFILE_META: Record<
     description: string;
   }
 > = {
-  RANDOM: {
-    id: 'RANDOM',
-    name: 'Bot Naïf / Aléatoire',
-    label: 'Bot Naïf / Aléatoire',
-    shortLabel: 'Naïf / Aléatoire',
+  BLIND: {
+    id: 'BLIND',
+    name: '1. Bot Aveugle (Sans info privée, sans coordination)',
+    label: 'Bot Aveugle (Sans info privée)',
+    shortLabel: 'Aveugle',
     description:
-      'Place ses 2 Défenseurs aléatoirement sur p ou p+1 (Piste Tactique ou Piste Furtivité). Sert d’étalon de base.',
+      'Ignore son tirage secret (T_k, P_k). Étape 2.1 : Tactique sur p+1 de sa propre Abatteuse (ou Bulldozer si HS). Étape 2.2 : Tactique sur p+1 de J1 (ou J2 si k=1) sans regarder les alliés.',
   },
-  COMBAT_PURE: {
-    id: 'COMBAT_PURE',
-    name: 'Bot « Combat Pur » (Réactif)',
-    label: 'Bot « Combat Pur » (Réactif)',
-    shortLabel: 'Combat Pur (Réactif)',
+  SOLO_INFORMED: {
+    id: 'SOLO_INFORMED',
+    name: '2. Bot Informé Solo (Info privée, zéro coordination)',
+    label: 'Bot Informé Solo (Info privée seule)',
+    shortLabel: 'Informé Solo',
     description:
-      'Étape 2.1 : Défend sa machine NORMAL menacée en Piste Tactique sur p+1 (ou son Abatteuse par défaut). Étape 2.2 : Soutient en Piste Tactique la case p+1 de la machine NORMAL ciblée par son dé (ou J1 pour viser S=2 Parade / S=3 Mise HS).',
+      'Utilise son dé (T_k, P_k) en Piste Tactique (2.1 si P_k=k, 2.2 si P_k!=k), mais ne regarde jamais les jetons alliés et n’utilise jamais la Furtivité.',
   },
-  HYBRID_STEALTH_COMBAT: {
-    id: 'HYBRID_STEALTH_COMBAT',
-    name: 'Bot « Hybride Furtivité + Combat » (Proactif)',
-    label: 'Bot « Hybride Furtivité + Combat » (Proactif)',
-    shortLabel: 'Hybride Furtivité + Combat',
+  COORD_HYBRID: {
+    id: 'COORD_HYBRID',
+    name: '3. Bot Coordonné Hybride (Info privée + Coordination tacite)',
+    label: 'Bot Coordonné Hybride (Référence Expert)',
+    shortLabel: 'Coordonné Hybride',
     description:
-      'Coordonne des paires en Furtivité (dans la limite de N jetons si MaxN est actif, et sans saboter une machine HS si PurgeSab est actif) pour poser Pièges/Sabotages, puis bascule en Piste Tactique.',
+      'Étape 2.1 : Signale sa menace en Tactique ou lance un appel Furtivité (1 jeton). Étape 2.2 : Coordonne les soutiens sans Overkill et complète prioritairement les paires Furtivité à 2.',
   },
   OMNISCIENT: {
     id: 'OMNISCIENT',
-    name: 'Bot « Omniscient » (Borne Haute)',
-    label: 'Bot « Omniscient » (Borne Haute)',
-    shortLabel: 'Omniscient (Max)',
+    name: '4. Bot Omniscient (Table ouverte / Plafond théorique)',
+    label: 'Bot Omniscient (Table ouverte)',
+    shortLabel: 'Omniscient',
     description:
-      'Connaît les N tirages secrets du tour pour allouer exactement les Défenseurs requis (seuils S=2+k et S=3+k sur les cases attaquées et paires de Furtivité sans aucun gaspillage).',
+      'Connaît la totalité des N tirages (T_1..T_N) dès la Phase 2 et alloue les 2N Défenseurs de manière globalement optimale (zéro jeton sur case non attaquée, calcul exact de k_assault).',
   },
 };
 
 export const DEFAULT_TABLE_CONFIGS: TableConfig[] = [
   {
-    id: 'TABLE_HYBRID',
-    name: 'Table Hybride Furtivité + Combat',
+    id: 'TABLE_COORD',
+    name: 'Table Coordonnée Hybride (Référence Expert)',
     description:
-      'Tous les joueurs combinent Pièges/Sabotages en Furtivité et Parades/Mises HS en Piste Tactique.',
-    botProfiles: ['HYBRID_STEALTH_COMBAT'],
+      'Info privée + Coordination tacite par lecture du plateau (signaux Furtivité en 2.1, complétion sans Overkill en 2.2).',
+    botProfiles: ['COORD_HYBRID'],
   },
   {
-    id: 'TABLE_COMBAT_PURE',
-    name: 'Table Combat Pur (Réactif)',
+    id: 'TABLE_SOLO',
+    name: 'Table Informée Solo (Info privée, zéro coordination)',
     description:
-      'Tous les joueurs jouent exclusivement sur la Piste Tactique en réaction aux menaces en p+1.',
-    botProfiles: ['COMBAT_PURE'],
+      'Chaque joueur joue son dé en Piste Tactique sans regarder les jetons des alliés ni utiliser la Furtivité.',
+    botProfiles: ['SOLO_INFORMED'],
   },
   {
-    id: 'TABLE_RANDOM',
-    name: 'Table Naïve / Aléatoire (Borne Basse)',
+    id: 'TABLE_BLIND',
+    name: 'Table Aveugle (Sans info privée, sans coordination)',
     description:
-      'Placement aléatoire sur p ou p+1 entre Piste Tactique et Piste Furtivité.',
-    botProfiles: ['RANDOM'],
+      'Chaque joueur ignore son gobelet et défend mécaniquement sa propre piste puis J1/J2 en Piste Tactique.',
+    botProfiles: ['BLIND'],
   },
   {
-    id: 'TABLE_OMNISCIENT',
-    name: 'Table Omnisciente (Borne Haute)',
+    id: 'TABLE_OMNI',
+    name: 'Table Omnisciente (Plafond théorique)',
     description:
-      'Équipe connaissant tous les tirages 2D6 pour mesurer le plafond théorique de survie.',
+      'Table ouverte connaissant les N tirages secrets à l’avance pour mesurer le coût du brouillard de guerre.',
     botProfiles: ['OMNISCIENT'],
   },
 ];

@@ -3,34 +3,39 @@ export type MachineType = 'A' | 'B';
 export type MachineStatus = 'NORMAL' | 'HS' | 'DESTROYED';
 export type DefenderTrackType = 'TACTICAL' | 'STEALTH';
 
+export type TacticalDefenderCap = 99 | 2 | 1;
+export type CombatThresholdShift = 0 | 1;
+export type BulldozerZeroStumpAction = 'NONE' | 'DESTROY_TREE';
+export type TacticsTrackPreset = 'ASSAULT_HIGH' | 'ASSAULT_LOW';
+
 export type BotProfileId =
-  | 'RANDOM'                 // Bot Naïf / Aléatoire
-  | 'COMBAT_PURE'            // Bot « Combat Pur » (Réactif)
-  | 'HYBRID_STEALTH_COMBAT'  // Bot « Hybride Furtivité + Combat » (Proactif)
-  | 'OMNISCIENT';            // Bot « Omniscient » (Borne Haute Théorique)
+  | 'BLIND'         // 1. Bot Aveugle (Sans info privée, sans coordination)
+  | 'SOLO_INFORMED' // 2. Bot Informé Solo (Avec info privée, zéro coordination)
+  | 'COORD_HYBRID'  // 3. Bot Coordonné Hybride (Info privée + Coordination tacite — Référence)
+  | 'OMNISCIENT';   // 4. Bot Omniscient (Table ouverte / Plafond théorique)
 
 export interface InitialMachineConfig {
-  harvesterPos: number;           // Case initiale Abatteuse (>= 1)
+  harvesterPos: number;           // Case initiale Abatteuse (toujours 1 en v3.2)
   harvesterStatus: 'NORMAL' | 'HS';
-  bulldozerPos: number;           // Case initiale Bulldozer (>= 1)
+  bulldozerPos: number;           // Case initiale Bulldozer (toujours 1 en v3.2)
   bulldozerStatus: 'NORMAL' | 'HS';
   initialStumpsCell1: number;     // Souches initiales en case 1 (>= 0)
 }
 
 export interface SimulationConfig {
-  numPlayers: number;                    // N in {3, 4, 5, 6}, défaut 4
-  numTurns: number;                      // X >= 1, défaut 8
-  initialTreesPerCell: number;           // a in {2, 3}, défaut 2
-  tacticsTrackSetup: TacticType[];       // Longueur 6, défaut ['A1','B1','A2','B2','A3','B3']
-  shuffleTacticsTrack: boolean;          // Si true, mélange tacticsTrackSetup en début de partie
-  initialMachinesState?: InitialMachineConfig[]; // Taille N (optionnel : utilisé si personnalisé)
+  numPlayers: number;                            // N in {3, 4, 5, 6}
+  numTurns: number;                              // X in {6, 7, 8, 9, 10, 12}
+  initialTreesPerCell: number;                   // a in {2, 3}
+  tacticsTrackPreset: TacticsTrackPreset;        // 'ASSAULT_HIGH' | 'ASSAULT_LOW'
+  tacticsTrackSetup: TacticType[];               // Déduit du preset (ou personnalisé)
+  shuffleTacticsTrack: boolean;                  // Si true, mélange tacticsTrackSetup en début de partie
+  initialMachinesState?: InitialMachineConfig[]; // Optionnel
 
-  // 5 Nouvelles Variables d'Équilibrage (v3.1)
-  staggeredInitialSetup: boolean;        // 1. Décalage initial (A en case 2, B en case 1, 1 souche + a-1 arbres en cases 1 et 2), défaut true
-  limitStealthTokensToN: boolean;        // 2. Réserve globale limitée à N jetons Furtivité (Pièges + Sabotages <= N), défaut true
-  repairClearsSabotage: boolean;         // 3. Sabotage éphémère retiré dès qu'une machine HS est réparée, défaut true
-  bulldozerOverflowAbattage: boolean;    // 4. Débordement Bulldozer : si 0 souche lors du Terrassement -> 1 Abattage, défaut true
-  activeRepairOnMultiHit: boolean;       // 5. Réparation active immédiate à l'Étape 3.1 si une machine HS reçoit >= 2 cartes, défaut true
+  // 4 Nouveaux Leviers d'Équilibrage v3.2 (+ tacticsTrackPreset ci-dessus)
+  tacticalDefenderCap: TacticalDefenderCap;           // 1. Plafond Défenseurs Tactiques par case : 99 (Sans limite), 2 (Max 2), 1 (Max 1)
+  combatThresholdShift: CombatThresholdShift;         // 2. Décalage des seuils S : 0 ou +1
+  bulldozerZeroStumpAction: BulldozerZeroStumpAction; // 3. Action Bulldozer si 0 souche : 'NONE' ou 'DESTROY_TREE'
+  initialStumpCell2: boolean;                         // 4. Si true : case 2 de J1 et J2 démarre avec 1 souche et a-1 arbres debout
 }
 
 export type GameParameters = SimulationConfig;
@@ -92,16 +97,18 @@ export interface CombatCellLog {
   sabotageBonus: number;
   defenseScoreS: number;
   assaultCountK: number;
+  thresholdShift: number;
   outcome: 'ATTACK_SUCCESS' | 'SIMPLE_PARRY' | 'PARRY_AND_HS';
   harvesterExploded: boolean;
   bulldozerExploded: boolean;
-  treesCutToStumps: number;       // Abattages (Arbre debout -> Souche)
-  bulldozerOverflowAbattageTriggered?: boolean;
-  stumpsCleared: number;          // Terrassements (Souches retirées)
-  treesRemovedByOverheat: number; // Pions retirés directement par Surchauffe A2/B2
-  treesDestroyedByExplosion: number; // Pions détruits par Explosion
+  treesCutToStumps: number;               // Abattages (Arbre debout -> Souche)
+  bulldozerDestroyedTreeOnZeroStump: number; // Arbre debout détruit définitivement par Bulldozer sur 0 souche
+  stumpsCleared: number;                  // Terrassements (Souches retirées)
+  treesRemovedByOverheat: number;         // Pions retirés directement par Surchauffe A2/B2
+  treesDestroyedByExplosion: number;      // Pions détruits par Explosion
   harvesterBecameHS: boolean;
   bulldozerBecameHS: boolean;
+  tacticalOverkillOnCell: number;
 }
 
 export interface StealthCellLog {
@@ -112,7 +119,8 @@ export interface StealthCellLog {
     | 'SABOTAGE_PLACED'
     | 'TRAP_PLACED'
     | 'FAILED_VACATED_OR_EXPLODED'
-    | 'FAILED_TOKEN_LIMIT_REACHED';
+    | 'FAILED_TOKEN_LIMIT_REACHED'
+    | 'ORPHAN_SINGLE_TOKEN';
   sabotagedMachines: MachineType[];
 }
 
@@ -151,7 +159,7 @@ export interface TurnTrace {
   combats: CombatCellLog[];
   stealthActions: StealthCellLog[];
   repairs: RepairCellLog[];
-  treesLostThisTurnPerPlayer: number[]; // Arbres debout ou détruits perdus ce tour par joueur J1..JN
+  treesLostThisTurnPerPlayer: number[]; // Arbres perdus ce tour par joueur J1..JN
   totalTreesLostThisTurn: number;
   endOfTurnSnapshot: Array<{
     playerIndex: number;
@@ -189,10 +197,10 @@ export interface SingleGameResult {
   tableConfigId: string;
   botProfiles: BotProfileId[];
   allocatedCellsPerTrack: number;
-  initialTotalTreesAllocated: number;
+  initialTotalTreesAllocated: number;   // Potentiel écologique initial (arbres debout + souches régénérables)
   referenceHorizonTrees: number;        // N * X * a (horizon de référence de la spécification)
   finalStandingTreesTotal: number;
-  totalTreesLost: number;               // Arbres perdus sur toute la partie (après régénération)
+  totalTreesLost: number;               // Arbres perdus par rapport au stock initial réel (arbres + souches régénérables)
   survivalRateHorizon: number;          // Ratio de survie sur l'horizon N * X * a (borné dans [0, 1])
   survivalRateVisited: number;          // Ratio de survie sur les cases visitées (1 .. maxPos+1)
   regeneratedTreesCount: number;
@@ -204,24 +212,26 @@ export interface SingleGameResult {
   survivingTreesPerPlayerOnHorizon: number[];
 
   // Compteurs d'événements de la partie
-  cutsCount: number;                    // Nombre d'arbres abattus (Arbre -> Souche)
-  bulldozerOverflowCutsCount: number;   // Dont abattages par débordement Bulldozer (0 souche)
-  clearingsCount: number;               // Nombre d'actions de Terrassement exécutées
-  stumpsClearedCount: number;           // Nombre total de souches rasées
-  overheatTriggersCount: number;        // Nombre de Surchauffes (A2/B2) subies en combat
-  overheatTreesRemovedCount: number;    // Nombre de pions retirés par Surchauffe
-  assaultTriggersCount: number;         // Nombre de cartes Assaut (A3/B3) résolues en combat
-  simpleParriesCount: number;           // Nombre de Parades simples (S == 2 + k_assault)
-  parryAndHSCount: number;              // Nombre de Parades + Mise HS (S >= 3 + k_assault)
-  explosionsCount: number;              // Nombre d'Explosions (A2+A3 ou B2+B3)
-  trapsPlacedCount: number;             // Nombre de Pièges posés en Furtivité
-  sabotagesPlacedCount: number;         // Nombre de Sabotages posés en Furtivité
-  stealthBlockedByLimitCount: number;   // Furtivités bloquées par la limite de N jetons
-  stealthFailuresCount: number;         // Nombre d'échecs de Furtivité (>=2 jetons sur case quittée/explosée)
-  repairsCount: number;                 // Nombre total de réparations (Étape 3.1 + Étape 3.4)
-  activeRepairsStep31Count: number;     // Dont réparations actives immédiates à l'Étape 3.1 (m >= 2)
-  sabotageClearedByRepairCount: number; // Sabotages purgés lors d'une réparation
-  respiteDrawsOnDestroyedCount: number; // Nombre de tirages sans effet sur machine détruite
+  cutsCount: number;                         // Nombre d'arbres abattus (Arbre -> Souche)
+  bulldozerDestroyedTreesCount: number;      // Arbres debout détruits définitivement par Bulldozer sur 0 souche
+  clearingsCount: number;                    // Nombre d'actions de Terrassement exécutées
+  stumpsClearedCount: number;                // Nombre total de souches rasées
+  overheatTriggersCount: number;             // Nombre de Surchauffes (A2/B2) subies en combat
+  overheatTreesRemovedCount: number;         // Nombre de pions retirés par Surchauffe
+  assaultTriggersCount: number;              // Nombre de cartes Assaut (A3/B3) résolues en combat
+  simpleParriesCount: number;                // Nombre de Parades simples (S == 2 + k + shift)
+  parryAndHSCount: number;                   // Nombre de Parades + Mise HS (S >= 3 + k + shift)
+  explosionsCount: number;                   // Nombre d'Explosions (A2+A3 ou B2+B3)
+  trapsPlacedCount: number;                  // Nombre de Pièges posés en Furtivité
+  sabotagesPlacedCount: number;              // Nombre de Sabotages posés en Furtivité
+  stealthBlockedByLimitCount: number;        // Furtivités bloquées par la limite de N jetons
+  stealthFailuresCount: number;              // Nombre d'échecs de Furtivité (>=2 jetons sur case quittée/explosée)
+  orphanStealthTokensCount: number;          // Furtivité Orpheline (jetons posés seuls stealthDefenders == 1 et perdus)
+  tacticalOverkillTokensCount: number;       // Overkill Tactique (jetons au-delà du seuil Mise HS ou sur case non attaquée)
+  repairsCount: number;                      // Nombre total de réparations (Étape 3.1 + Étape 3.4)
+  activeRepairsStep31Count: number;          // Dont réparations actives immédiates à l'Étape 3.1 (m >= 2)
+  sabotageClearedByRepairCount: number;      // Sabotages purgés lors d'une réparation
+  respiteDrawsOnDestroyedCount: number;      // Nombre de tirages sans effet sur machine détruite
   tacticalDefendersPlaced: number;
   stealthDefendersPlaced: number;
 
@@ -255,7 +265,7 @@ export interface TableConfigSummary {
 
   // Moyennes par partie des événements
   meanCuts: number;
-  meanBulldozerOverflowCuts: number;
+  meanBulldozerDestroyedTrees: number;
   meanClearings: number;
   meanStumpsCleared: number;
   meanOverheats: number;
@@ -267,39 +277,60 @@ export interface TableConfigSummary {
   meanTrapsPlaced: number;
   meanSabotagesPlaced: number;
   meanStealthBlockedByLimit: number;
+  meanOrphanStealthTokens: number;
+  meanTacticalOverkillTokens: number;
   meanRepairs: number;
   meanActiveRepairsStep31: number;
   meanSabotageClearedByRepair: number;
   meanRespiteDraws: number;
 }
 
+export interface InformationAndCoordinationMetrics {
+  survBlind: number;               // Taux de survie Bot Aveugle (0..1)
+  survSolo: number;                // Taux de survie Bot Informé Solo (0..1)
+  survCoord: number;               // Taux de survie Bot Coordonné Hybride (0..1) — Référence
+  survOmni: number;                // Taux de survie Bot Omniscient (0..1)
+  treesLostBlind: number;
+  treesLostSolo: number;
+  treesLostCoord: number;
+  treesLostOmni: number;
+  privateInfoGainPct: number;      // Survie Solo - Survie Aveugle (en ratio 0..1)
+  privateInfoGainTrees: number;    // Arbres sauvés grâce à l'info privée (lostBlind - lostSolo)
+  coordinationGainPct: number;     // Survie Coord - Survie Solo (en ratio 0..1)
+  coordinationGainTrees: number;   // Arbres sauvés grâce à la coordination & furtivité (lostSolo - lostCoord)
+  fogOfWarCostPct: number;         // Survie Omni - Survie Coord (en ratio 0..1)
+  fogOfWarCostTrees: number;       // Arbres perdus à cause du brouillard (lostCoord - lostOmni)
+  meanOrphanStealthCoord: number;  // Furtivité Orpheline moyenne (Bot Coordonné)
+  meanTacticalOverkillCoord: number; // Overkill Tactique moyen (Bot Coordonné)
+  meanTacticalOverkillSolo: number;  // Overkill Tactique moyen (Bot Solo)
+}
+
 export interface FourCriteriaEvaluation {
-  // 1. Intérêt Stratégique & Synergie Furtivité (/100)
-  strategicAndStealthSynergy: {
-    score: number;
-    combatVsRandomGainScore: number;    // /50
-    hybridVsCombatGainScore: number;    // /50
-    deltaCombatVsRandom: number;
-    deltaHybridVsCombat: number;
-    interpretation: string;
-  };
-  // 2. Tension & Courbe d'Attrition (/100)
+  // 1. Cible de Difficulté & Tension (Survie Coord dans [70% .. 82%]) (/100)
   tensionAndAttrition: {
     score: number;
-    survivalTargetProximityScore: number; // /50
-    hsAndExplosionDynamicsScore: number;  // /50
+    survivalTargetProximityScore: number; // /70
+    hsAndExplosionDynamicsScore: number;  // /30
     meanSurvivalHorizon: number;
     meanExplosionsPerGame: number;
     meanParryAndHSPerGame: number;
     interpretation: string;
   };
-  // 3. Efficacité de la Coordination & des Seuils S (/100)
+  // 2. Valeur de la Connaissance Privée (Survie Solo - Survie Aveugle >= +5%) (/100)
+  privateInfoValue: {
+    score: number;
+    deltaSoloVsBlind: number;
+    treesSavedByPrivateInfo: number;
+    interpretation: string;
+  };
+  // 3. Valeur de la Coordination & Furtivité (Survie Coord - Survie Solo >= +5%) (/100)
   coordinationEfficiency: {
     score: number;
-    parryAndKnockoutRateScore: number;  // /60
-    stealthConversionRateScore: number; // /40
-    combatSuccessDefenseRate: number;
+    deltaCoordVsSolo: number;
+    treesSavedByCoordination: number;
     trapsAndSabotagesPerGame: number;
+    orphanStealthPerGame: number;
+    tacticalOverkillPerGame: number;
     interpretation: string;
   };
   // 4. Équité d'Exposition sur l'Œil (J1 .. JN) (/100)
@@ -309,13 +340,14 @@ export interface FourCriteriaEvaluation {
     playerLossSpread: number;
     interpretation: string;
   };
-  overallDesignScore: number; // Moyenne sur 100
+  infoAndCoordMetrics: InformationAndCoordinationMetrics;
+  overallDesignScore: number; // Note Design sur 100
 }
 
 export interface VariantEvaluationResult {
   variantId: string;
   variantLabel: string;
-  leversCode: string; // ex: "Setup:Oui | MaxN:Oui | PurgeSab:Oui | BullOver:Oui | ActRep:Oui"
+  leversCode: string; // ex: "Cap:2 · Shift:+0 · Bull0:DESTROY_TREE · StumpC2:Oui · Piste:ASSAULT_HIGH"
   params: SimulationConfig;
   tableSummaries: TableConfigSummary[];
   criteria: FourCriteriaEvaluation;
@@ -332,23 +364,15 @@ export interface VariantEvaluationResult {
 }
 
 export interface ParameterSweepInput {
-  numPlayersValues: number[];
-  numTurnsValues: number[];
-  initialTreesPerCellValues: number[]; // limité à [2, 3], défaut [2]
-  shuffleTacticsTrackValues: boolean[];
-  tacticsTrackSetup: TacticType[];
-
-  // Les 5 nouvelles variables d'équilibrage dans le Sweep Monte-Carlo
-  staggeredInitialSetupValues: boolean[];
-  limitStealthTokensToNValues: boolean[];
-  repairClearsSabotageValues: boolean[];
-  bulldozerOverflowAbattageValues: boolean[];
-  activeRepairOnMultiHitValues: boolean[];
-
-  // Paramètres utilisés uniquement si staggeredInitialSetup == false
-  initialHarvesterStatus: 'NORMAL' | 'HS';
-  initialBulldozerStatus: 'NORMAL' | 'HS';
-  initialStumpsCell1: number;
+  numPlayersValues: number[];                         // défaut [3, 4, 5, 6]
+  numTurnsValues: number[];                           // défaut [6, 7, 8, 9, 10, 12]
+  initialTreesPerCellValues: number[];                // défaut [2, 3]
+  tacticalDefenderCapValues: TacticalDefenderCap[];   // défaut [99, 2, 1]
+  combatThresholdShiftValues: CombatThresholdShift[]; // défaut [0, 1]
+  bulldozerZeroStumpActionValues: BulldozerZeroStumpAction[]; // défaut ['NONE', 'DESTROY_TREE']
+  initialStumpCell2Values: boolean[];                 // défaut [false, true]
+  tacticsTrackPresetValues: TacticsTrackPreset[];     // défaut ['ASSAULT_HIGH', 'ASSAULT_LOW']
+  shuffleTacticsTrackValues: boolean[];               // défaut [false]
 }
 
 export interface CampaignConfig {

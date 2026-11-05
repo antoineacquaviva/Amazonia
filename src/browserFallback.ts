@@ -1,15 +1,20 @@
 import {
   BotProfileId,
+  BulldozerZeroStumpAction,
   CampaignConfig,
   CampaignRecord,
+  CombatThresholdShift,
   SimulationConfig,
   SingleGameResult,
   TableConfig,
+  TacticalDefenderCap,
+  TacticsTrackPreset,
   VariantEvaluationResult,
 } from './sim/types';
 import {
   DEFAULT_SWEEP_INPUT,
   DEFAULT_TABLE_CONFIGS,
+  TACTICS_TRACK_PRESETS,
 } from './sim/i18n';
 import { runSingleGame } from './sim/engine';
 import {
@@ -19,7 +24,7 @@ import {
 } from './sim/evaluator';
 import { SeededRNG } from './sim/rng';
 
-const LS_CAMPAIGNS_KEY = 'amazonia_v31_campaigns';
+const LS_CAMPAIGNS_KEY = 'amazonia_v32_campaigns';
 
 class BrowserCampaignManager {
   private campaigns: Map<string, CampaignRecord> = new Map();
@@ -47,10 +52,11 @@ class BrowserCampaignManager {
           if (c && c.id) {
             const isCompatible =
               c.config?.type === 'ORACLE_STRESS_TEST'
-                ? Boolean(c.stressTelemetry?.scoreDistributionByBotLevel?.COMBAT_PURE) &&
-                  Boolean(c.config?.sweep?.staggeredInitialSetupValues)
-                : c.variantResults.length === 0 ||
-                  Boolean(c.variantResults[0]?.leversCode);
+                ? Boolean(c.stressTelemetry?.scoreDistributionByBotLevel?.COORD_HYBRID) &&
+                  Boolean(c.config?.sweep?.tacticalDefenderCapValues)
+                : (c.variantResults.length === 0 &&
+                    Boolean(c.config?.sweep?.tacticalDefenderCapValues)) ||
+                  Boolean(c.variantResults[0]?.criteria?.infoAndCoordMetrics);
             if (!isCompatible) continue;
 
             if (c.status === 'RUNNING') {
@@ -201,9 +207,9 @@ class BrowserCampaignManager {
               totalParryAndHSObserved: 0,
               totalTrapsAndSabotagesObserved: 0,
               scoreDistributionByBotLevel: {
-                RANDOM: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                COMBAT_PURE: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                HYBRID_STEALTH_COMBAT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                BLIND: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                SOLO_INFORMED: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                COORD_HYBRID: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
                 OMNISCIENT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
               },
               capturedExtremeLogs: [],
@@ -361,10 +367,10 @@ class BrowserCampaignManager {
       (record.config.baseSeed || 77777) + record.progress.completedGames
     );
     const botLevels: BotProfileId[] = [
-      'HYBRID_STEALTH_COMBAT',
-      'COMBAT_PURE',
+      'COORD_HYBRID',
+      'SOLO_INFORMED',
+      'BLIND',
       'OMNISCIENT',
-      'RANDOM',
     ];
 
     const telemetry = record.stressTelemetry!;
@@ -372,11 +378,16 @@ class BrowserCampaignManager {
       BotProfileId,
       { sumSurv: number; sumLost: number; sumExp: number; defeats: number; miracles: number }
     > = {
-      RANDOM: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      COMBAT_PURE: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      HYBRID_STEALTH_COMBAT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      BLIND: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      SOLO_INFORMED: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      COORD_HYBRID: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
       OMNISCIENT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
     };
+
+    const caps: TacticalDefenderCap[] = [99, 2, 1];
+    const shifts: CombatThresholdShift[] = [0, 1];
+    const bullActions: BulldozerZeroStumpAction[] = ['NONE', 'DESTROY_TREE'];
+    const presets: TacticsTrackPreset[] = ['ASSAULT_HIGH', 'ASSAULT_LOW'];
 
     const stepStress = () => {
       if (ctrl.stopped) {
@@ -403,17 +414,18 @@ class BrowserCampaignManager {
         let params: SimulationConfig;
         if (record.config.randomizeParametersInStress) {
           const n = paramRng.nextInt(3, 6);
+          const preset = presets[paramRng.nextInt(0, presets.length - 1)];
           params = {
             numPlayers: n,
             numTurns: paramRng.nextInt(6, 12),
             initialTreesPerCell: paramRng.nextInt(2, 3),
-            tacticsTrackSetup: ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'],
-            shuffleTacticsTrack: paramRng.nextFloat() < 0.5,
-            staggeredInitialSetup: paramRng.nextFloat() < 0.5,
-            limitStealthTokensToN: paramRng.nextFloat() < 0.5,
-            repairClearsSabotage: paramRng.nextFloat() < 0.5,
-            bulldozerOverflowAbattage: paramRng.nextFloat() < 0.5,
-            activeRepairOnMultiHit: paramRng.nextFloat() < 0.5,
+            tacticsTrackPreset: preset,
+            tacticsTrackSetup: [...TACTICS_TRACK_PRESETS[preset].setup],
+            shuffleTacticsTrack: paramRng.nextFloat() < 0.25,
+            tacticalDefenderCap: caps[paramRng.nextInt(0, caps.length - 1)],
+            combatThresholdShift: shifts[paramRng.nextInt(0, shifts.length - 1)],
+            bulldozerZeroStumpAction: bullActions[paramRng.nextInt(0, bullActions.length - 1)],
+            initialStumpCell2: paramRng.nextFloat() < 0.5,
           };
         } else {
           params = variants[gameIdx % variants.length].params;
@@ -481,15 +493,20 @@ class BrowserCampaignManager {
 
   private createInitialReferenceCampaign(): void {
     this.startCampaign({
-      id: 'camp_ref_v31_five_levers',
-      name: 'Campagne de Référence v3.1 — Étalonnage des 5 Leviers (Setup, MaxN, PurgeSab, BullOver, ActRep)',
+      id: 'camp_ref_v32_info_coord',
+      name: 'Campagne de Référence v3.2 — Leviers de Difficulté & Analyse Connaissance Privée / Coordination',
       type: 'FIVE_LEVERS_ABLATION',
-      gamesPerVariantAndTable: 50,
+      gamesPerVariantAndTable: 40,
       sweep: {
-        ...DEFAULT_SWEEP_INPUT,
-        initialTreesPerCellValues: [2, 3],
-        staggeredInitialSetupValues: [false, true],
-        bulldozerOverflowAbattageValues: [false, true],
+        numPlayersValues: [4],
+        numTurnsValues: [8],
+        initialTreesPerCellValues: [2],
+        tacticalDefenderCapValues: [99, 2, 1],
+        combatThresholdShiftValues: [0, 1],
+        bulldozerZeroStumpActionValues: ['NONE', 'DESTROY_TREE'],
+        initialStumpCell2Values: [false],
+        tacticsTrackPresetValues: ['ASSAULT_HIGH', 'ASSAULT_LOW'],
+        shuffleTacticsTrackValues: [false],
       },
       selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
       includeCalibrationTables: true,
