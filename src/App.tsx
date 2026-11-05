@@ -4,10 +4,12 @@ import {
   CampaignRecord,
 } from './sim/types';
 import {
+  BackendDiagnosticInfo,
   controlCampaign,
   createCampaign,
   fetchCampaigns,
   fetchServerHealth,
+  getLastBackendDiagnostic,
   isUsingBrowserFallback,
   removeCampaign,
   ServerHealthInfo,
@@ -17,7 +19,7 @@ import { DashboardView } from './components/DashboardView';
 import { EvaluationBuilderView } from './components/EvaluationBuilderView';
 import { StressTestView } from './components/StressTestView';
 import { JournalsAndExportView } from './components/JournalsAndExportView';
-import { Sun, Moon, RefreshCw } from 'lucide-react';
+import { Sun, Moon, RefreshCw, Cpu, AlertTriangle } from 'lucide-react';
 
 type ActiveTab = 'dashboard' | 'builder' | 'stress' | 'journals';
 
@@ -33,6 +35,10 @@ export default function App() {
     null
   );
   const [fallbackActive, setFallbackActive] = useState<boolean>(false);
+  const [backendDiag, setBackendDiag] = useState<BackendDiagnosticInfo | null>(
+    null
+  );
+  const [showVmHelp, setShowVmHelp] = useState<boolean>(false);
   const [retryingBackend, setRetryingBackend] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -53,6 +59,7 @@ export default function App() {
       ]);
       setServerHealth(health);
       setFallbackActive(isUsingBrowserFallback());
+      setBackendDiag(getLastBackendDiagnostic());
       setCampaigns(list);
       setSelectedCampaignId((prev) => {
         if (prev && list.some((c) => c.id === prev)) return prev;
@@ -71,6 +78,7 @@ export default function App() {
       const health = await fetchServerHealth(true);
       setServerHealth(health);
       setFallbackActive(isUsingBrowserFallback());
+      setBackendDiag(getLastBackendDiagnostic());
       await loadCampaigns();
     } finally {
       setRetryingBackend(false);
@@ -226,17 +234,18 @@ export default function App() {
       <div className="px-6 py-2.5 bg-slate-100/80 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs">
         <div className="flex flex-wrap items-center gap-2.5 text-slate-600 dark:text-slate-400">
           {!fallbackActive && serverHealth ? (
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-100/90 dark:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-300 font-semibold">
+            <div className="inline-flex flex-wrap items-center gap-2 px-2.5 py-1 rounded-md bg-emerald-100/90 dark:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-300 font-semibold tabular-nums">
               <span className="w-2 h-2 rounded-full bg-emerald-600 dark:bg-emerald-400" />
+              <Cpu className="w-3.5 h-3.5" />
               <span>
-                Serveur VM Actif ({serverHealth.cpuCount} vCPU · {serverHealth.workersCount} worker{serverHealth.workersCount > 1 ? 's' : ''})
+                Serveur VM Actif ({serverHealth.cpuCount} vCPU · {serverHealth.busyWorkers ?? 0}/{serverHealth.workersCount} workers actifs · CPU VM : {serverHealth.cpuPercent ?? 0}% · Load : {serverHealth.loadAvg1m ?? 0})
               </span>
             </div>
           ) : (
-            <div className="inline-flex items-center gap-2">
+            <div className="inline-flex flex-wrap items-center gap-2">
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-100/90 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-300 font-semibold">
                 <span className="w-2 h-2 rounded-full bg-amber-600 dark:bg-amber-400" />
-                <span>Fallback Navigateur Local</span>
+                <span>Fallback Navigateur Local (PC utilisateur — VM à 0%)</span>
               </div>
               <button
                 type="button"
@@ -250,11 +259,17 @@ export default function App() {
                 />
                 {retryingBackend ? 'Connexion...' : 'Réessayer Backend'}
               </button>
+              <button
+                type="button"
+                onClick={() => setShowVmHelp((s) => !s)}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 font-medium transition-colors cursor-pointer"
+              >
+                <AlertTriangle className="w-3 h-3" />
+                {showVmHelp ? 'Masquer Diagnostic VM' : 'Pourquoi la VM est à 0% ?'}
+              </button>
             </div>
           )}
 
-          <span aria-hidden="true">·</span>
-          <span>Architecture Combat & Furtivité (Piste Tactique + Piste Furtivité)</span>
           <span aria-hidden="true">·</span>
           <span className="font-mono tabular-nums">
             {campaigns.length} campagne(s)
@@ -294,6 +309,50 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* Panneau de Diagnostic VM lorsque le Fallback Navigateur est actif */}
+      {fallbackActive && showVmHelp && (
+        <div className="mx-6 mt-4 p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-lg text-xs text-amber-950 dark:text-amber-200 space-y-2">
+          <div className="font-bold text-sm flex items-center justify-between">
+            <span>
+              Diagnostic d'Exécution : Pourquoi votre VM Oracle affiche 0% de CPU ?
+            </span>
+            <button
+              onClick={() => setShowVmHelp(false)}
+              className="underline font-normal cursor-pointer"
+            >
+              Fermer
+            </button>
+          </div>
+          <p>
+            Lorsque le badge orange <strong>« Fallback Navigateur Local »</strong> est affiché, les simulations tournent sur un seul cœur <strong>dans l'onglet de votre propre navigateur (sur votre ordinateur)</strong> et non sur la VM Oracle.
+          </p>
+          {backendDiag && (
+            <div className="p-2.5 rounded bg-white/80 dark:bg-slate-900/80 border border-amber-200 dark:border-amber-800 font-mono text-[11px]">
+              <div>• Dernière URL testée : <strong>{backendDiag.testedUrl}</strong></div>
+              <div>
+                • Code HTTP reçu : <strong>{backendDiag.httpStatus ?? 'Aucune réponse'}</strong>{' '}
+                {backendDiag.serverHeader ? `(Serveur: ${backendDiag.serverHeader})` : ''}
+              </div>
+              <div>• Cause détectée : {backendDiag.reason}</div>
+            </div>
+          )}
+          <div className="pt-1">
+            <strong>Comment activer le moteur multi-cœurs sur votre VM Oracle :</strong>
+            <ol className="list-decimal list-inside mt-1 space-y-1">
+              <li>
+                Sur le portail de déploiement de votre VM, le projet doit être configuré en <strong>Node.js / Express (AI Studio)</strong> (et non en <em>HTML/JS Statique</em>).
+              </li>
+              <li>
+                La commande de démarrage (<code>ExecStart</code>) doit lancer le serveur Node : <code>npx tsx server.ts</code> (avec <code>npm install --legacy-peer-deps &amp;&amp; npm run build</code> en commande de build).
+              </li>
+              <li>
+                Dès que le service Node tourne sur la VM, cliquez sur <strong>« Réessayer Backend »</strong> : le badge passera au vert <strong>« Serveur VM Actif (X vCPU) »</strong> et utilisera 100% des workers de la VM.
+              </li>
+            </ol>
+          </div>
+        </div>
+      )}
 
       {/* Bannière d'erreur éventuelle */}
       {errorBanner && (

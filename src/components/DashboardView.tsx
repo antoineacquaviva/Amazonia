@@ -51,7 +51,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return [...currentCampaign.variantResults].sort(
       (a, b) => b.criteria.overallDesignScore - a.criteria.overallDesignScore
     );
-  }, [currentCampaign]);
+  }, [
+    currentCampaign,
+    currentCampaign?.variantResults.length,
+    currentCampaign?.updatedAt,
+  ]);
 
   const selectedVariant: VariantEvaluationResult | null = useMemo(() => {
     if (sortedVariants.length === 0) return null;
@@ -211,7 +215,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               1. Comparaison Directe des Variantes & Arbitrages D1 vs D2 (Surchauffe × Assaut)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Cliquez sur une ligne pour inspecter ses distributions par tour ($1..X$), par joueur ($J_1..J_N$) et ses compteurs de combat/furtivité.
+              Cliquez sur une ligne pour inspecter ses distributions par tour (Tours 1..X), par joueur (J1..JN) et ses compteurs de combat/furtivité.
             </p>
           </div>
           <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">

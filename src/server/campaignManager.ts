@@ -236,9 +236,63 @@ class SimulationWorkerPool {
       this.dispatchNext();
     });
   }
+
+  public getPoolStats(): {
+    totalWorkers: number;
+    busyWorkers: number;
+    idleWorkers: number;
+    queuedTasks: number;
+    workerFailedPermanently: boolean;
+  } {
+    return {
+      totalWorkers: this.workers.length || WORKER_POOL_SIZE,
+      busyWorkers: this.activeTasks.size,
+      idleWorkers: this.idleWorkers.length,
+      queuedTasks: this.queue.length,
+      workerFailedPermanently: this.workerFailedPermanently,
+    };
+  }
 }
 
 const sharedWorkerPool = new SimulationWorkerPool();
+
+// Mesure temps-réel du % d'utilisation CPU sur tous les cœurs de la VM
+let lastCpuSnapshot = os.cpus();
+let lastCpuPercent = 0;
+let lastCpuCheckTime = Date.now();
+
+function measureVmCpuPercent(): number {
+  const now = Date.now();
+  if (now - lastCpuCheckTime < 400) {
+    return lastCpuPercent;
+  }
+  const currentCpus = os.cpus();
+  let idleDiff = 0;
+  let totalDiff = 0;
+
+  for (let i = 0; i < currentCpus.length; i++) {
+    const prev = lastCpuSnapshot[i]?.times;
+    const curr = currentCpus[i]?.times;
+    if (!prev || !curr) continue;
+
+    const prevTotal = prev.user + prev.nice + prev.sys + prev.idle + prev.irq;
+    const currTotal = curr.user + curr.nice + curr.sys + curr.idle + curr.irq;
+
+    idleDiff += curr.idle - prev.idle;
+    totalDiff += currTotal - prevTotal;
+  }
+
+  lastCpuSnapshot = currentCpus;
+  lastCpuCheckTime = now;
+
+  if (totalDiff > 0) {
+    lastCpuPercent = Math.max(
+      0,
+      Math.min(100, Math.round(((totalDiff - idleDiff) / totalDiff) * 100))
+    );
+  }
+  return lastCpuPercent;
+}
 
 export class CampaignManager {
   private campaigns: Map<string, CampaignRecord> = new Map();
@@ -254,6 +308,22 @@ export class CampaignManager {
     if (this.campaigns.size === 0) {
       this.createInitialReferenceCampaign();
     }
+  }
+
+  public getSystemTelemetry() {
+    const pool = sharedWorkerPool.getPoolStats();
+    const loadAvg = os.loadavg();
+    const mem = process.memoryUsage();
+    return {
+      cpuCount: TOTAL_CPU_CORES,
+      workersCount: WORKER_POOL_SIZE,
+      busyWorkers: pool.busyWorkers,
+      queuedTasks: pool.queuedTasks,
+      cpuPercent: measureVmCpuPercent(),
+      loadAvg1m: Number((loadAvg[0] || 0).toFixed(2)),
+      rssMemoryMb: Math.round(mem.rss / (1024 * 1024)),
+      activeCampaigns: this.listCampaigns().filter((c) => c.status === 'RUNNING').length,
+    };
   }
 
   private loadCampaignsFromDisk(): void {
@@ -491,7 +561,7 @@ export class CampaignManager {
           for (let g = startG; g < endG; g++) {
             jobs.push({
               seed: baseSeed + g + 1,
-              recordTrace: g < 2,
+              recordTrace: vIdx < 12 && g < 1,
             });
           }
 

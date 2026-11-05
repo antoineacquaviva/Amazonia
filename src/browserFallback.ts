@@ -77,16 +77,28 @@ class BrowserCampaignManager {
     }
   }
 
+  private cloneRecord(c: CampaignRecord): CampaignRecord {
+    return {
+      ...c,
+      progress: { ...c.progress },
+      variantResults: [...c.variantResults],
+      stressTelemetry: c.stressTelemetry ? { ...c.stressTelemetry } : undefined,
+    };
+  }
+
   public listCampaigns(): CampaignRecord[] {
     this.ensureInitialized();
-    return Array.from(this.campaigns.values()).sort(
-      (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
-    );
+    return Array.from(this.campaigns.values())
+      .map((c) => this.cloneRecord(c))
+      .sort(
+        (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+      );
   }
 
   public getCampaign(id: string): CampaignRecord | undefined {
     this.ensureInitialized();
-    return this.campaigns.get(id);
+    const found = this.campaigns.get(id);
+    return found ? this.cloneRecord(found) : undefined;
   }
 
   public deleteCampaign(id: string): void {

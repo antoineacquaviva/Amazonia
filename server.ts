@@ -27,6 +27,7 @@ async function startServer() {
 
   // Santé & Informations d'environnement (Serveur VM Oracle multi-cœurs)
   apiRouter.get('/health', (_req, res) => {
+    const sys = campaignManager.getSystemTelemetry();
     res.json({
       status: 'ok',
       version: '3.0.0-combat-furtivite',
@@ -34,9 +35,12 @@ async function startServer() {
       port: Number(process.env.PORT) || 3000,
       cpuCount: TOTAL_CPU_CORES,
       workersCount: WORKER_POOL_SIZE,
-      activeCampaigns: campaignManager
-        .listCampaigns()
-        .filter((c) => c.status === 'RUNNING').length,
+      busyWorkers: sys.busyWorkers,
+      queuedTasks: sys.queuedTasks,
+      cpuPercent: sys.cpuPercent,
+      loadAvg1m: sys.loadAvg1m,
+      rssMemoryMb: sys.rssMemoryMb,
+      activeCampaigns: sys.activeCampaigns,
     });
   });
 

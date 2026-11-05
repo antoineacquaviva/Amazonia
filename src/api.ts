@@ -11,6 +11,7 @@ import { DEFAULT_SIMULATION_CONFIG } from './sim/i18n';
 import { browserCampaignManager } from './browserFallback';
 
 let useBrowserFallback = false;
+let resolvedBasePrefix: string = '.';
 
 export interface ServerHealthInfo {
   status: string;
@@ -19,7 +20,26 @@ export interface ServerHealthInfo {
   port: number;
   cpuCount: number;
   workersCount: number;
+  busyWorkers?: number;
+  queuedTasks?: number;
+  cpuPercent?: number;
+  loadAvg1m?: number;
+  rssMemoryMb?: number;
   activeCampaigns: number;
+}
+
+export interface BackendDiagnosticInfo {
+  testedUrl: string;
+  httpStatus: number | null;
+  serverHeader: string | null;
+  contentType: string | null;
+  reason: string;
+}
+
+let lastDiagnostic: BackendDiagnosticInfo | null = null;
+
+export function getLastBackendDiagnostic(): BackendDiagnosticInfo | null {
+  return lastDiagnostic;
 }
 
 export function isUsingBrowserFallback(): boolean {
@@ -32,7 +52,21 @@ export function setUseBrowserFallback(value: boolean): void {
 
 export function buildApiUrl(endpoint: string): string {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
-  return `./${cleanEndpoint}`;
+  return `${resolvedBasePrefix}/${cleanEndpoint}`;
+}
+
+function getCandidatePrefixes(): string[] {
+  const candidates: string[] = ['.'];
+  if (typeof window !== 'undefined' && window.location?.pathname) {
+    const cleanPath = window.location.pathname.replace(/\/index\.html$/, '').replace(/\/+$/, '');
+    if (cleanPath && cleanPath !== '') {
+      candidates.unshift(cleanPath);
+    }
+  }
+  if (!candidates.includes('')) {
+    candidates.push('');
+  }
+  return Array.from(new Set(candidates));
 }
 
 export async function fetchServerHealth(
@@ -42,20 +76,49 @@ export async function fetchServerHealth(
     useBrowserFallback = false;
   }
   if (useBrowserFallback) return null;
-  try {
-    const res = await fetch(buildApiUrl('api/health'));
-    const contentType = res.headers.get('content-type') || '';
-    if (!res.ok || !contentType.includes('application/json')) {
-      useBrowserFallback = true;
-      return null;
+
+  const prefixes = getCandidatePrefixes();
+
+  for (const prefix of prefixes) {
+    const url = `${prefix}/api/health`;
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      const contentType = res.headers.get('content-type') || '';
+      const serverHeader = res.headers.get('server') || null;
+
+      if (res.ok && contentType.includes('application/json')) {
+        const data = (await res.json()) as ServerHealthInfo;
+        if (data && data.status === 'ok') {
+          resolvedBasePrefix = prefix;
+          useBrowserFallback = false;
+          lastDiagnostic = null;
+          return data;
+        }
+      } else {
+        lastDiagnostic = {
+          testedUrl: url,
+          httpStatus: res.status,
+          serverHeader,
+          contentType,
+          reason:
+            serverHeader && serverHeader.toLowerCase().includes('python')
+              ? `Le serveur web (${serverHeader}) sert uniquement des fichiers statiques (HTML/JS) au lieu d'exécuter le backend Node.js (tsx server.ts).`
+              : `Réponse HTTP ${res.status} (${contentType || 'non-JSON'}) sur ${url}. Le backend Node.js/Express n'est pas routé sur cette URL.`,
+        };
+      }
+    } catch (err: any) {
+      lastDiagnostic = {
+        testedUrl: url,
+        httpStatus: null,
+        serverHeader: null,
+        contentType: null,
+        reason: `Erreur réseau lors de la connexion à ${url} (${err?.message || 'serveur injoignable'}).`,
+      };
     }
-    const data = (await res.json()) as ServerHealthInfo;
-    useBrowserFallback = false;
-    return data;
-  } catch {
-    useBrowserFallback = true;
-    return null;
   }
+
+  useBrowserFallback = true;
+  return null;
 }
 
 async function tryBackendJson<T>(
@@ -64,7 +127,10 @@ async function tryBackendJson<T>(
 ): Promise<T | null> {
   if (useBrowserFallback) return null;
   try {
-    const res = await fetch(buildApiUrl(endpoint), options);
+    const res = await fetch(buildApiUrl(endpoint), {
+      ...options,
+      cache: 'no-store',
+    });
     const contentType = res.headers.get('content-type') || '';
     if (!res.ok || !contentType.includes('application/json')) {
       if (
