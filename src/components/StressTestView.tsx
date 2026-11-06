@@ -50,7 +50,7 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
 
   const handleLaunchStress = async () => {
     await onStartCampaign({
-      name: `Stress-Test Multi-Cœurs v3.2 (${maxGames.toLocaleString('fr-FR')} parties)`,
+      name: `Stress-Test Multi-Cœurs v3.3 (${maxGames.toLocaleString('fr-FR')} parties)`,
       type: 'ORACLE_STRESS_TEST',
       maxTotalGames: maxGames,
       randomizeParametersInStress: randomizeParams,
@@ -62,7 +62,10 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
   const telemetry = currentStress?.stressTelemetry;
   const botKeys: BotProfileId[] = [
     'BLIND',
+    'PROB_ONLY',
     'SOLO_INFORMED',
+    'COORD_NO_DICE',
+    'COORD_ONE_SHOT',
     'COORD_HYBRID',
     'OMNISCIENT',
   ];
@@ -74,10 +77,10 @@ export const StressTestView: React.FC<StressTestViewProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              Stress-Test Multi-Cœurs v3.2 & Vérificateur d'Invariants (I1..I4)
+              Stress-Test Multi-Cœurs v3.3 & Vérificateur d'Invariants (I1..I4)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Exécute des centaines de milliers de parties en parallèle sur les workers de la VM Oracle avec fuzzing des nouveaux leviers v3.2 (Cap, Shift, Bull0, StumpC2, Piste) et comparaison des 4 profils d'IA.
+              Exécute des centaines de milliers de parties en parallèle sur les workers de la VM Oracle avec fuzzing des leviers v3.3 (Cap, Shift, SynergieHS, Bull0, StumpC2, Piste) et comparaison des 7 profils d'IA.
             </p>
           </div>
 

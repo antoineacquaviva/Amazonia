@@ -30,7 +30,7 @@ async function startServer() {
     const sys = campaignManager.getSystemTelemetry();
     res.json({
       status: 'ok',
-      version: '3.0.0-combat-furtivite',
+      version: '3.3.0-shapley-7bots',
       environment: process.env.NODE_ENV || 'development',
       port: Number(process.env.PORT) || 3000,
       cpuCount: TOTAL_CPU_CORES,
@@ -158,7 +158,7 @@ async function startServer() {
         ...DEFAULT_SIMULATION_CONFIG,
         ...(req.body.params || {}),
       };
-      const botProfiles: BotProfileId[] = req.body.botProfiles || ['HYBRID_STEALTH_COMBAT'];
+      const botProfiles: BotProfileId[] = req.body.botProfiles || ['COORD_HYBRID'];
 
       const game = runSingleGame(params, botProfiles, seed, 'custom_inspection', true);
       res.json(game);

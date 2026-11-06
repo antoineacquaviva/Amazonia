@@ -213,7 +213,7 @@ export async function simulateSingleGameTrace(payload: {
   if (data !== null) return data;
   return runSingleGame(
     { ...DEFAULT_SIMULATION_CONFIG, ...(payload.params || {}) },
-    payload.botProfiles || ['HYBRID_STEALTH_COMBAT'],
+    payload.botProfiles || ['COORD_HYBRID'],
     Number(payload.seed) || 42001,
     'custom_inspection',
     true

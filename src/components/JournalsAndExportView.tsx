@@ -4,6 +4,7 @@ import {
   BulldozerZeroStumpAction,
   CampaignRecord,
   CombatThresholdShift,
+  ParryHsRule,
   SimulationConfig,
   SingleGameResult,
   TacticalDefenderCap,
@@ -14,6 +15,7 @@ import {
   computeEvilEyeProbabilities,
   DEFAULT_SIMULATION_CONFIG,
   MASTER_MATRIX_6X6,
+  PARRY_HS_RULE_META,
   resolveTargetPlayerRank1Based,
   TACTIC_META,
   TACTICS_TRACK_PRESETS,
@@ -33,9 +35,10 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
   const [initialTrees, setInitialTrees] = useState<number>(2);
   const [tacticalCap, setTacticalCap] = useState<TacticalDefenderCap>(2);
   const [combatShift, setCombatShift] = useState<CombatThresholdShift>(0);
+  const [parryHsRule, setParryHsRule] = useState<ParryHsRule>('SYNERGY_TRAP_SAB');
   const [bullZeroAction, setBullZeroAction] = useState<BulldozerZeroStumpAction>('DESTROY_TREE');
-  const [initialStumpC2, setInitialStumpC2] = useState<boolean>(false);
-  const [trackPreset, setTrackPreset] = useState<TacticsTrackPreset>('ASSAULT_HIGH');
+  const [initialStumpC2, setInitialStumpC2] = useState<boolean>(true);
+  const [trackPreset, setTrackPreset] = useState<TacticsTrackPreset>('ASSAULT_LOW');
   const [botProfile, setBotProfile] = useState<BotProfileId>('COORD_HYBRID');
 
   const [simResult, setSimResult] = useState<SingleGameResult | null>(null);
@@ -54,6 +57,7 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
         tacticsTrackSetup: [...TACTICS_TRACK_PRESETS[trackPreset].setup],
         tacticalDefenderCap: tacticalCap,
         combatThresholdShift: combatShift,
+        parryHsRule,
         bulldozerZeroStumpAction: bullZeroAction,
         initialStumpCell2: initialStumpC2,
         initialMachinesState: undefined,
@@ -87,15 +91,15 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* SECTION 1 : SIMULATEUR UNITAIRE & COMBAT LOG COMPLET v3.2 */}
+      {/* SECTION 1 : SIMULATEUR UNITAIRE & COMBAT LOG COMPLET v3.3 */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              1. Inspecteur de Partie Unitaire & Journal de Combat (« Combat Log » v3.2)
+              1. Inspecteur de Partie Unitaire & Journal de Combat (« Combat Log » v3.3)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Simulez une graine précise avec les 4 profils gradués (Aveugle, Solo, Coordonné, Omniscient) et les leviers v3.2 (Plafond Cap, Shift, Bull0, StumpC2, Piste).
+              Simulez une graine précise avec les 7 profils gradués (Aveugle, Probabiliste I2, Solo, Coord Sans Dé, Coord 1-Passe, Coord Révisable 2.2, Omniscient) et la règle Synergie Mise HS.
             </p>
           </div>
 
@@ -162,33 +166,59 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
               onChange={(e) => setInitialTrees(Number(e.target.value) || 2)}
               className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              <option value={2}>a = 2 (Défaut)</option>
+              <option value={2}>a = 2 (Figé v3.3)</option>
               <option value={3}>a = 3</option>
             </select>
           </div>
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-              Profil Gradué de Bot
+              Profil Gradué de Bot (1..7)
             </label>
             <select
               value={botProfile}
               onChange={(e) => setBotProfile(e.target.value as BotProfileId)}
               className="w-full px-2 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              {(['COORD_HYBRID', 'SOLO_INFORMED', 'BLIND', 'OMNISCIENT'] as const).map(
-                (b) => (
-                  <option key={b} value={b}>
-                    {BOT_PROFILE_META[b].shortLabel}
-                  </option>
-                )
-              )}
+              {(
+                [
+                  'COORD_HYBRID',
+                  'COORD_ONE_SHOT',
+                  'COORD_NO_DICE',
+                  'SOLO_INFORMED',
+                  'PROB_ONLY',
+                  'BLIND',
+                  'OMNISCIENT',
+                ] as const
+              ).map((b) => (
+                <option key={b} value={b}>
+                  {BOT_PROFILE_META[b].shortLabel}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
-        {/* Contrôles des 5 leviers v3.2 */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mt-3">
+        {/* Contrôles des leviers v3.3 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mt-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+              Règle Mise HS (v3.3)
+            </label>
+            <select
+              value={parryHsRule}
+              onChange={(e) => setParryHsRule(e.target.value as ParryHsRule)}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-400 dark:border-emerald-700 rounded"
+            >
+              <option value="SYNERGY_TRAP_SAB">
+                {PARRY_HS_RULE_META.SYNERGY_TRAP_SAB.shortLabel}
+              </option>
+              <option value="STANDARD_S3">
+                {PARRY_HS_RULE_META.STANDARD_S3.shortLabel}
+              </option>
+            </select>
+          </div>
+
           <div>
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
               Plafond Tactique (Cap)
@@ -229,8 +259,8 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
               }
               className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              <option value="NONE">NONE (Aucun effet)</option>
               <option value="DESTROY_TREE">DESTROY_TREE (-1 Arbre)</option>
+              <option value="NONE">NONE (Aucun effet)</option>
             </select>
           </div>
 
@@ -243,8 +273,8 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
               onChange={(e) => setTrackPreset(e.target.value as TacticsTrackPreset)}
               className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
-              <option value="ASSAULT_HIGH">ASSAULT_HIGH [A3,B3,A2,B2,A1,B1]</option>
               <option value="ASSAULT_LOW">ASSAULT_LOW [A1,B1,A2,B2,A3,B3]</option>
+              <option value="ASSAULT_HIGH">ASSAULT_HIGH [A3,B3,A2,B2,A1,B1]</option>
             </select>
           </div>
 
@@ -280,33 +310,33 @@ export const JournalsAndExportView: React.FC<JournalsAndExportViewProps> = ({
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Abattages (Bull0Arb)</div>
-                <div className="text-sm font-bold font-mono">
-                  {simResult.cutsCount} ({simResult.bulldozerDestroyedTreesCount})
-                </div>
-              </div>
-              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Terrassements</div>
-                <div className="text-sm font-bold font-mono">
-                  {simResult.clearingsCount} ({simResult.stumpsClearedCount} s.)
-                </div>
-              </div>
-              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Surchauffes / Assauts</div>
-                <div className="text-sm font-bold font-mono">
-                  {simResult.overheatTriggersCount} / {simResult.assaultTriggersCount}
-                </div>
-              </div>
-              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <div className="text-[11px] text-slate-500">Parades / Mises HS</div>
                 <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
                   {simResult.simpleParriesCount} / {simResult.parryAndHSCount}
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Révisions 2.2 / Signaux</div>
+                <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  {simResult.step2RevisionsCount} rév. / {simResult.successfulSignalCompletionsCount} sig.
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Pertinence des Choix</div>
+                <div className="text-sm font-bold font-mono text-sky-700 dark:text-sky-400">
+                  {(simResult.placementRelevanceScore * 100).toFixed(1)} %
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <div className="text-[11px] text-slate-500">Furt. Orpheline / Overkill</div>
                 <div className="text-sm font-bold font-mono text-amber-700 dark:text-amber-400">
                   {simResult.orphanStealthTokensCount} / {simResult.tacticalOverkillTokensCount}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <div className="text-[11px] text-slate-500">Pièges / Sabotages</div>
+                <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  {simResult.trapsPlacedCount}P / {simResult.sabotagesPlacedCount}S
                 </div>
               </div>
               <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">

@@ -5,6 +5,7 @@ import {
   FourCriteriaEvaluation,
   InformationAndCoordinationMetrics,
   ParameterSweepInput,
+  ParryHsRule,
   SimulationConfig,
   SingleGameResult,
   TableConfig,
@@ -28,14 +29,44 @@ function mean(arr: number[]): number {
 function stdDev(arr: number[], m?: number): number {
   if (arr.length <= 1) return 0;
   const avg = m !== undefined ? m : mean(arr);
-  const variance = arr.reduce((acc, v) => acc + (v - avg) * (v - avg), 0) / arr.length;
+  const variance =
+    arr.reduce((acc, v) => acc + (v - avg) * (v - avg), 0) / arr.length;
   return Math.sqrt(variance);
+}
+
+/**
+ * Calcule le coefficient de corrélation linéaire de Pearson r in [-1, 1]
+ */
+function pearsonCorrelation(xs: number[], ys: number[]): number {
+  const n = Math.min(xs.length, ys.length);
+  if (n <= 2) return 0;
+  const mx = mean(xs);
+  const my = mean(ys);
+  let num = 0;
+  let denX = 0;
+  let denY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    denX += dx * dx;
+    denY += dy * dy;
+  }
+  const denom = Math.sqrt(denX * denY);
+  if (denom < 1e-9) return 0;
+  return clamp(num / denom, -1, 1);
 }
 
 export function buildLeversCode(params: SimulationConfig): string {
   const capStr =
-    params.tacticalDefenderCap === 99 ? '99(Illim)' : String(params.tacticalDefenderCap);
-  return `Cap:${capStr} · Shift:+${params.combatThresholdShift} · Bull0:${
+    params.tacticalDefenderCap === 99
+      ? '99(Illim)'
+      : String(params.tacticalDefenderCap);
+  const hsStr =
+    (params.parryHsRule ?? 'SYNERGY_TRAP_SAB') === 'SYNERGY_TRAP_SAB'
+      ? 'SynergieHS(S>=2)'
+      : 'StandardHS(S>=3)';
+  return `Cap:${capStr} · Shift:+${params.combatThresholdShift} · ${hsStr} · Bull0:${
     params.bulldozerZeroStumpAction
   } · StumpC2:${params.initialStumpCell2 ? 'Oui' : 'Non'} · Piste:${params.tacticsTrackPreset}`;
 }
@@ -57,18 +88,21 @@ export function expandParameterSweep(sweep: ParameterSweepInput): Array<{
     params: SimulationConfig;
   }> = [];
 
-  const nVals = sweep.numPlayersValues?.length > 0 ? sweep.numPlayersValues : [3, 4, 5, 6];
+  const nVals =
+    sweep.numPlayersValues?.length > 0 ? sweep.numPlayersValues : [3, 4, 5, 6];
   const xVals =
-    sweep.numTurnsValues?.length > 0 ? sweep.numTurnsValues : [6, 7, 8, 9, 10, 12];
-  const filteredAVals = (sweep.initialTreesPerCellValues ?? [2, 3]).filter(
+    sweep.numTurnsValues?.length > 0
+      ? sweep.numTurnsValues
+      : [6, 7, 8, 9, 10, 12];
+  const filteredAVals = (sweep.initialTreesPerCellValues ?? [2]).filter(
     (a) => a === 2 || a === 3
   );
-  const aVals = filteredAVals.length > 0 ? filteredAVals : [2, 3];
+  const aVals = filteredAVals.length > 0 ? filteredAVals : [2];
 
   const capVals: TacticalDefenderCap[] =
     sweep.tacticalDefenderCapValues?.length > 0
       ? sweep.tacticalDefenderCapValues
-      : [99, 2, 1];
+      : [1, 2];
   const shiftVals: CombatThresholdShift[] =
     sweep.combatThresholdShiftValues?.length > 0
       ? sweep.combatThresholdShiftValues
@@ -76,15 +110,19 @@ export function expandParameterSweep(sweep: ParameterSweepInput): Array<{
   const bullZeroVals: BulldozerZeroStumpAction[] =
     sweep.bulldozerZeroStumpActionValues?.length > 0
       ? sweep.bulldozerZeroStumpActionValues
-      : ['NONE', 'DESTROY_TREE'];
+      : ['DESTROY_TREE'];
   const stumpC2Vals: boolean[] =
     sweep.initialStumpCell2Values?.length > 0
       ? sweep.initialStumpCell2Values
-      : [false, true];
+      : [true];
   const presetVals: TacticsTrackPreset[] =
     sweep.tacticsTrackPresetValues?.length > 0
       ? sweep.tacticsTrackPresetValues
-      : ['ASSAULT_HIGH', 'ASSAULT_LOW'];
+      : ['ASSAULT_LOW'];
+  const parryHsVals: ParryHsRule[] =
+    sweep.parryHsRuleValues && sweep.parryHsRuleValues.length > 0
+      ? sweep.parryHsRuleValues
+      : ['SYNERGY_TRAP_SAB', 'STANDARD_S3'];
   const shufVals: boolean[] =
     sweep.shuffleTacticsTrackValues?.length > 0
       ? sweep.shuffleTacticsTrackValues
@@ -96,29 +134,33 @@ export function expandParameterSweep(sweep: ParameterSweepInput): Array<{
       for (const initialTreesPerCell of aVals) {
         for (const tacticalDefenderCap of capVals) {
           for (const combatThresholdShift of shiftVals) {
-            for (const bulldozerZeroStumpAction of bullZeroVals) {
-              for (const initialStumpCell2 of stumpC2Vals) {
-                for (const tacticsTrackPreset of presetVals) {
-                  for (const shuffleTacticsTrack of shufVals) {
-                    const params: SimulationConfig = {
-                      numPlayers,
-                      numTurns,
-                      initialTreesPerCell,
-                      tacticsTrackPreset,
-                      tacticsTrackSetup: resolveTacticsTrackFromPreset(tacticsTrackPreset),
-                      shuffleTacticsTrack,
-                      tacticalDefenderCap,
-                      combatThresholdShift,
-                      bulldozerZeroStumpAction,
-                      initialStumpCell2,
-                    };
+            for (const parryHsRule of parryHsVals) {
+              for (const bulldozerZeroStumpAction of bullZeroVals) {
+                for (const initialStumpCell2 of stumpC2Vals) {
+                  for (const tacticsTrackPreset of presetVals) {
+                    for (const shuffleTacticsTrack of shufVals) {
+                      const params: SimulationConfig = {
+                        numPlayers,
+                        numTurns,
+                        initialTreesPerCell,
+                        tacticsTrackPreset,
+                        tacticsTrackSetup:
+                          resolveTacticsTrackFromPreset(tacticsTrackPreset),
+                        shuffleTacticsTrack,
+                        tacticalDefenderCap,
+                        combatThresholdShift,
+                        bulldozerZeroStumpAction,
+                        initialStumpCell2,
+                        parryHsRule,
+                      };
 
-                    results.push({
-                      variantId: `V${String(idx++).padStart(4, '0')}`,
-                      variantLabel: buildVariantLabel(params),
-                      leversCode: buildLeversCode(params),
-                      params,
-                    });
+                      results.push({
+                        variantId: `V${String(idx++).padStart(4, '0')}`,
+                        variantLabel: buildVariantLabel(params),
+                        leversCode: buildLeversCode(params),
+                        params,
+                      });
+                    }
                   }
                 }
               }
@@ -177,6 +219,10 @@ export function summarizeTableGames(
       meanActiveRepairsStep31: 0,
       meanSabotageClearedByRepair: 0,
       meanRespiteDraws: 0,
+      meanStep2Revisions: 0,
+      meanSuccessfulSignalCompletions: 0,
+      meanPlacementRelevanceScore: 0,
+      choiceToSurvivalCorrelation: 0,
     };
   }
 
@@ -186,6 +232,7 @@ export function summarizeTableGames(
   const survivalHorizons = games.map((g) => g.survivalRateHorizon);
   const survivalVisited = games.map((g) => g.survivalRateVisited);
   const treesLostTotals = games.map((g) => g.totalTreesLost);
+  const relevanceScores = games.map((g) => g.placementRelevanceScore ?? 0);
 
   const meanSurvH = mean(survivalHorizons);
   const stdSurvH = stdDev(survivalHorizons, meanSurvH);
@@ -193,7 +240,6 @@ export function summarizeTableGames(
   const meanLost = mean(treesLostTotals);
   const stdLost = stdDev(treesLostTotals, meanLost);
 
-  // Par tour (t = 1..X)
   const meanTreesLostPerTurn: number[] = [];
   const stdDevTreesLostPerTurn: number[] = [];
   for (let t = 0; t < numTurns; t++) {
@@ -203,7 +249,6 @@ export function summarizeTableGames(
     stdDevTreesLostPerTurn.push(stdDev(vals, m));
   }
 
-  // Par joueur (J1..JN)
   const meanTreesLostPerPlayer: number[] = [];
   const stdDevTreesLostPerPlayer: number[] = [];
   for (let p = 0; p < numPlayers; p++) {
@@ -222,6 +267,11 @@ export function summarizeTableGames(
   for (const g of games) {
     bracketCounts[g.victoryBracket]++;
   }
+
+  const choiceToSurvivalCorrelation = pearsonCorrelation(
+    relevanceScores,
+    survivalHorizons
+  );
 
   return {
     tableConfigId: tableConfig.id,
@@ -244,33 +294,51 @@ export function summarizeTableGames(
       DEFEAT: bracketCounts.DEFEAT / nGames,
     },
     meanCuts: mean(games.map((g) => g.cutsCount)),
-    meanBulldozerDestroyedTrees: mean(games.map((g) => g.bulldozerDestroyedTreesCount)),
+    meanBulldozerDestroyedTrees: mean(
+      games.map((g) => g.bulldozerDestroyedTreesCount)
+    ),
     meanClearings: mean(games.map((g) => g.clearingsCount)),
     meanStumpsCleared: mean(games.map((g) => g.stumpsClearedCount)),
     meanOverheats: mean(games.map((g) => g.overheatTriggersCount)),
-    meanOverheatTreesRemoved: mean(games.map((g) => g.overheatTreesRemovedCount)),
+    meanOverheatTreesRemoved: mean(
+      games.map((g) => g.overheatTreesRemovedCount)
+    ),
     meanAssaults: mean(games.map((g) => g.assaultTriggersCount)),
     meanSimpleParries: mean(games.map((g) => g.simpleParriesCount)),
     meanParryAndHS: mean(games.map((g) => g.parryAndHSCount)),
     meanExplosions: mean(games.map((g) => g.explosionsCount)),
     meanTrapsPlaced: mean(games.map((g) => g.trapsPlacedCount)),
     meanSabotagesPlaced: mean(games.map((g) => g.sabotagesPlacedCount)),
-    meanStealthBlockedByLimit: mean(games.map((g) => g.stealthBlockedByLimitCount)),
+    meanStealthBlockedByLimit: mean(
+      games.map((g) => g.stealthBlockedByLimitCount)
+    ),
     meanOrphanStealthTokens: mean(games.map((g) => g.orphanStealthTokensCount)),
-    meanTacticalOverkillTokens: mean(games.map((g) => g.tacticalOverkillTokensCount)),
+    meanTacticalOverkillTokens: mean(
+      games.map((g) => g.tacticalOverkillTokensCount)
+    ),
     meanRepairs: mean(games.map((g) => g.repairsCount)),
-    meanActiveRepairsStep31: mean(games.map((g) => g.activeRepairsStep31Count)),
-    meanSabotageClearedByRepair: mean(games.map((g) => g.sabotageClearedByRepairCount)),
+    meanActiveRepairsStep31: mean(
+      games.map((g) => g.activeRepairsStep31Count)
+    ),
+    meanSabotageClearedByRepair: mean(
+      games.map((g) => g.sabotageClearedByRepairCount)
+    ),
     meanRespiteDraws: mean(games.map((g) => g.respiteDrawsOnDestroyedCount)),
+    meanStep2Revisions: mean(games.map((g) => g.step2RevisionsCount ?? 0)),
+    meanSuccessfulSignalCompletions: mean(
+      games.map((g) => g.successfulSignalCompletionsCount ?? 0)
+    ),
+    meanPlacementRelevanceScore: mean(relevanceScores),
+    choiceToSurvivalCorrelation,
   };
 }
 
 /**
- * Calcule la Note Design (/100) recalibrée v3.2 :
- * 1. Survie Coord dans la cible de difficulté élevée [70% .. 82%] (pénalise fortement >88% trop facile ou <50% punitif).
- * 2. Gain Info Privée élevé (Survie Solo - Survie Aveugle >= +5%).
- * 3. Gain Coordination élevé (Survie Coord - Survie Solo >= +5%).
- * 4. Équité d'exposition sur l'Œil (J1..JN).
+ * Calcule la Note Design (/100) refondue v3.3 autour des 4 Piliers et des 5 Gains Décisionnels :
+ * 1) Tension, Difficulté & Synergie HS (25%) : Survie dans [45%..82%] (plateau optimal [50%..80%]) + dynamisme HS/Terrassements/Abattages.
+ * 2) Récompense de la Lecture des Intentions I1 + I2 (30%) : Gain Probabiliste I2 (PROB_ONLY - BLIND) + Vrai Gain I1 en Équipe (COORD_HYBRID - COORD_NO_DICE).
+ * 3) Récompense de la Coordination & Boucle Révisable I3 (30%) : Gain Coordination totale (COORD_HYBRID - SOLO_INFORMED) + Gain Boucle 2.2 (COORD_HYBRID - COORD_ONE_SHOT) + Corrélation Choix/Survie r.
+ * 4) Efficience Cognitive & Équité (15%) : Faible Coût du Brouillard (OMNI - COORD_HYBRID), zéro Furtivité Orpheline, maîtrise de l'Overkill Tactique et équité sur l'Œil.
  */
 export function evaluateFourCriteria(
   params: SimulationConfig,
@@ -282,24 +350,57 @@ export function evaluateFourCriteria(
   }
 
   const blindSummary = byId.get('TABLE_BLIND') ?? summaries[0];
-  const soloSummary = byId.get('TABLE_SOLO') ?? blindSummary;
-  const coordSummary = byId.get('TABLE_COORD') ?? soloSummary ?? summaries[0];
+  const probSummary = byId.get('TABLE_PROB') ?? blindSummary;
+  const soloSummary = byId.get('TABLE_SOLO') ?? probSummary;
+  const coordNoDiceSummary = byId.get('TABLE_COORD_NO_DICE') ?? soloSummary;
+  const coordOneShotSummary = byId.get('TABLE_COORD_ONE_SHOT') ?? soloSummary;
+  const coordSummary =
+    byId.get('TABLE_COORD') ?? coordOneShotSummary ?? summaries[0];
   const omniSummary = byId.get('TABLE_OMNI') ?? coordSummary;
 
-  const survBlind = blindSummary ? blindSummary.meanSurvivalRateHorizon : 0.55;
-  const survSolo = soloSummary ? soloSummary.meanSurvivalRateHorizon : 0.65;
-  const survCoord = coordSummary ? coordSummary.meanSurvivalRateHorizon : 0.75;
-  const survOmni = omniSummary ? omniSummary.meanSurvivalRateHorizon : 0.85;
+  const survBlind = blindSummary ? blindSummary.meanSurvivalRateHorizon : 0.45;
+  const survProbOnly = probSummary ? probSummary.meanSurvivalRateHorizon : survBlind;
+  const survSolo = soloSummary ? soloSummary.meanSurvivalRateHorizon : survProbOnly;
+  const survCoordNoDice = coordNoDiceSummary
+    ? coordNoDiceSummary.meanSurvivalRateHorizon
+    : survProbOnly;
+  const survCoordOneShot = coordOneShotSummary
+    ? coordOneShotSummary.meanSurvivalRateHorizon
+    : survSolo;
+  const survCoord = coordSummary ? coordSummary.meanSurvivalRateHorizon : 0.7;
+  const survOmni = omniSummary ? omniSummary.meanSurvivalRateHorizon : 0.8;
 
   const treesLostBlind = blindSummary ? blindSummary.meanTreesLostTotal : 0;
-  const treesLostSolo = soloSummary ? soloSummary.meanTreesLostTotal : 0;
+  const treesLostProbOnly = probSummary ? probSummary.meanTreesLostTotal : treesLostBlind;
+  const treesLostSolo = soloSummary ? soloSummary.meanTreesLostTotal : treesLostProbOnly;
+  const treesLostCoordNoDice = coordNoDiceSummary
+    ? coordNoDiceSummary.meanTreesLostTotal
+    : treesLostProbOnly;
+  const treesLostCoordOneShot = coordOneShotSummary
+    ? coordOneShotSummary.meanTreesLostTotal
+    : treesLostSolo;
   const treesLostCoord = coordSummary ? coordSummary.meanTreesLostTotal : 0;
   const treesLostOmni = omniSummary ? omniSummary.meanTreesLostTotal : 0;
 
-  const privateInfoGainPct = survSolo - survBlind;
-  const privateInfoGainTrees = treesLostBlind - treesLostSolo;
+  // Les 5 Gains Décisionnels v3.3
+  const probabilisticReadingGainPct = survProbOnly - survBlind;
+  const probabilisticReadingGainTrees = treesLostBlind - treesLostProbOnly;
+
+  const privateInfoSoloGainPct = survSolo - survProbOnly;
+  const privateInfoSoloGainTrees = treesLostProbOnly - treesLostSolo;
+
+  const privateInfoTeamGainPct = survCoord - survCoordNoDice;
+  const privateInfoTeamGainTrees = treesLostCoordNoDice - treesLostCoord;
+
+  const coordinationOneShotGainPct = survCoordOneShot - survSolo;
+  const coordinationOneShotGainTrees = treesLostSolo - treesLostCoordOneShot;
+
+  const step2RevisionLoopGainPct = survCoord - survCoordOneShot;
+  const step2RevisionLoopGainTrees = treesLostCoordOneShot - treesLostCoord;
+
   const coordinationGainPct = survCoord - survSolo;
   const coordinationGainTrees = treesLostSolo - treesLostCoord;
+
   const fogOfWarCostPct = survOmni - survCoord;
   const fogOfWarCostTrees = treesLostCoord - treesLostOmni;
 
@@ -312,18 +413,44 @@ export function evaluateFourCriteria(
   const meanTacticalOverkillSolo = soloSummary
     ? soloSummary.meanTacticalOverkillTokens
     : 0;
+  const meanStep2RevisionsCoord = coordSummary
+    ? coordSummary.meanStep2Revisions
+    : 0;
+  const meanSignalCompletionsCoord = coordSummary
+    ? coordSummary.meanSuccessfulSignalCompletions
+    : 0;
+  const choiceToSurvivalCorrelationCoord = coordSummary
+    ? coordSummary.choiceToSurvivalCorrelation
+    : 0;
 
   const infoAndCoordMetrics: InformationAndCoordinationMetrics = {
     survBlind,
+    survProbOnly,
     survSolo,
+    survCoordNoDice,
+    survCoordOneShot,
     survCoord,
     survOmni,
     treesLostBlind,
+    treesLostProbOnly,
     treesLostSolo,
+    treesLostCoordNoDice,
+    treesLostCoordOneShot,
     treesLostCoord,
     treesLostOmni,
-    privateInfoGainPct,
-    privateInfoGainTrees,
+    probabilisticReadingGainPct,
+    probabilisticReadingGainTrees,
+    privateInfoSoloGainPct,
+    privateInfoSoloGainTrees,
+    privateInfoTeamGainPct,
+    privateInfoTeamGainTrees,
+    privateInfoGainPct: privateInfoTeamGainPct,
+    privateInfoGainTrees: privateInfoTeamGainTrees,
+    coordinationOneShotGainPct,
+    coordinationOneShotGainTrees,
+    step2RevisionLoopGainPct,
+    step2RevisionLoopGainTrees,
+    step2RevisionGainPct: step2RevisionLoopGainPct,
     coordinationGainPct,
     coordinationGainTrees,
     fogOfWarCostPct,
@@ -331,84 +458,109 @@ export function evaluateFourCriteria(
     meanOrphanStealthCoord,
     meanTacticalOverkillCoord,
     meanTacticalOverkillSolo,
+    meanStep2RevisionsCoord,
+    meanSignalCompletionsCoord,
+    choiceToSurvivalCorrelationCoord,
   };
 
   // ---------------------------------------------------------------------------
-  // CRITÈRE 1 : TENSION & CIBLE DE DIFFICULTÉ ÉLEVÉE [70% .. 82%] (/100)
+  // PILIER 1 : TENSION, DIFFICULTÉ & SYNERGIE HS [45% .. 82%] (25%)
+  // (Aucune pénalité sous 70% : plateau optimal plein entre 50% et 80%)
   // ---------------------------------------------------------------------------
   let survivalTargetProximityScore = 0;
-  if (survCoord >= 0.70 && survCoord <= 0.82) {
-    // Dans la fenêtre idéale [70% .. 82%] -> 70/70
-    const distFromCenter = Math.abs(survCoord - 0.76);
-    survivalTargetProximityScore = 70 - (distFromCenter / 0.06) * 4; // 66..70/70
-  } else if (survCoord > 0.82) {
-    // Au-dessus de 82% : pénalité forte surtout au-delà de 88% (trop facile)
-    const excess = survCoord - 0.82;
-    if (survCoord <= 0.88) {
-      survivalTargetProximityScore = 66 - (excess / 0.06) * 30; // descend de 66 à 36
-    } else {
-      survivalTargetProximityScore = clamp(36 - ((survCoord - 0.88) / 0.08) * 36, 0, 36);
-    }
+  if (survCoord >= 0.50 && survCoord <= 0.80) {
+    // Plateau optimal plein [50% .. 80%] -> 68..70 / 70
+    const distFromMid = Math.abs(survCoord - 0.65);
+    survivalTargetProximityScore = 70 - (distFromMid / 0.15) * 2;
+  } else if (survCoord >= 0.42 && survCoord < 0.50) {
+    // Décroissance douce entre 42% et 50% (Hardcore exigeant)
+    survivalTargetProximityScore = 52 + ((survCoord - 0.42) / 0.08) * 16;
+  } else if (survCoord < 0.42) {
+    // En dessous de 42% : trop punitif / injouable
+    survivalTargetProximityScore = clamp((survCoord / 0.42) * 52, 0, 52);
+  } else if (survCoord > 0.80 && survCoord <= 0.82) {
+    survivalTargetProximityScore = 64;
   } else {
-    // En dessous de 70% : pénalité forte surtout en dessous de 50% (punitif)
-    const deficit = 0.70 - survCoord;
-    if (survCoord >= 0.50) {
-      survivalTargetProximityScore = 66 - (deficit / 0.20) * 40; // descend de 66 à 26
-    } else {
-      survivalTargetProximityScore = clamp(26 - ((0.50 - survCoord) / 0.25) * 26, 0, 26);
-    }
+    // Au-dessus de 82% : trop facile (pénalité forte)
+    const excess = survCoord - 0.82;
+    survivalTargetProximityScore = clamp(64 - (excess / 0.12) * 64, 0, 64);
   }
 
   const meanExplosionsPerGame = coordSummary ? coordSummary.meanExplosions : 0;
   const meanParryAndHSPerGame = coordSummary ? coordSummary.meanParryAndHS : 0;
   const meanOverheatsPerGame = coordSummary ? coordSummary.meanOverheats : 0;
+  const meanClearingsAndBull0 = coordSummary
+    ? coordSummary.meanClearings + coordSummary.meanBulldozerDestroyedTrees
+    : 0;
 
   const hsActivityRatio =
-    (meanParryAndHSPerGame + meanOverheatsPerGame) / Math.max(1, params.numTurns * 0.5);
-  const hsScore = clamp(hsActivityRatio * 22, 0, 22);
-  const explosionBonus = clamp(meanExplosionsPerGame * 16, 0, 8);
-  const hsAndExplosionDynamicsScore = clamp(hsScore + explosionBonus, 0, 30);
+    (meanParryAndHSPerGame + meanOverheatsPerGame * 0.5) /
+    Math.max(1, params.numTurns * 0.4);
+  const hsScore = clamp(hsActivityRatio * 20, 0, 20);
+  const attritionDynamicBonus = clamp(
+    meanClearingsAndBull0 * 3 + meanExplosionsPerGame * 8,
+    0,
+    10
+  );
+  const hsAndExplosionDynamicsScore = clamp(
+    hsScore + attritionDynamicBonus,
+    0,
+    30
+  );
 
   const tensionScore = Math.round(
     clamp(survivalTargetProximityScore + hsAndExplosionDynamicsScore, 0, 100)
   );
 
   // ---------------------------------------------------------------------------
-  // CRITÈRE 2 : GAIN INFO PRIVÉE (Survie Solo - Survie Aveugle >= +5%) (/100)
+  // PILIER 2 : RÉCOMPENSE DE LA LECTURE DES INTENTIONS I1 + I2 (30%)
+  // Combine Gain de Lecture Probabiliste I2 (PROB_ONLY - BLIND) + Vrai Gain du Dé Privé I1 en Équipe (COORD_HYBRID - COORD_NO_DICE)
   // ---------------------------------------------------------------------------
-  // Si >= +5% -> 85..100/100 ; si 0% -> 20/100
-  let privateInfoScore = 0;
-  if (privateInfoGainPct >= 0.05) {
-    privateInfoScore = clamp(85 + ((privateInfoGainPct - 0.05) / 0.05) * 15, 85, 100);
-  } else if (privateInfoGainPct > 0) {
-    privateInfoScore = clamp(20 + (privateInfoGainPct / 0.05) * 65, 20, 85);
-  } else {
-    privateInfoScore = clamp(20 + privateInfoGainPct * 200, 0, 20);
-  }
-  privateInfoScore = Math.round(privateInfoScore);
+  const scoreI2 = clamp(
+    25 + (probabilisticReadingGainPct / 0.05) * 25,
+    0,
+    50
+  );
+  const scoreI1Team = clamp(
+    25 + (privateInfoTeamGainPct / 0.04) * 25,
+    0,
+    50
+  );
+  const privateInfoScore = Math.round(clamp(scoreI2 + scoreI1Team, 0, 100));
 
   // ---------------------------------------------------------------------------
-  // CRITÈRE 3 : GAIN COORDINATION & FURTIVITÉ (Survie Coord - Survie Solo >= +5%) (/100)
+  // PILIER 3 : RÉCOMPENSE DE LA COORDINATION & BOUCLE RÉVISABLE I3 (30%)
+  // Combine Gain Coordination totale (COORD_HYBRID - SOLO_INFORMED) + Gain Boucle Révision 2.2 (COORD_HYBRID - COORD_ONE_SHOT) + Corrélation Choix/Survie r
   // ---------------------------------------------------------------------------
   const trapsSabPerGame = coordSummary
     ? coordSummary.meanTrapsPlaced + coordSummary.meanSabotagesPlaced
     : 0;
-  let coordGainBase = 0;
-  if (coordinationGainPct >= 0.05) {
-    coordGainBase = clamp(70 + ((coordinationGainPct - 0.05) / 0.05) * 15, 70, 85);
-  } else if (coordinationGainPct > 0) {
-    coordGainBase = clamp(15 + (coordinationGainPct / 0.05) * 55, 15, 70);
-  } else {
-    coordGainBase = clamp(15 + coordinationGainPct * 150, 0, 15);
-  }
-  const stealthActivityBonus = clamp((trapsSabPerGame / 2.5) * 15, 0, 15);
-  const orphanPenalty = clamp(meanOrphanStealthCoord * 8, 0, 20);
+  const scoreCoordTotal = clamp(
+    20 + (coordinationGainPct / 0.05) * 25,
+    0,
+    45
+  );
+  const scoreRevisionLoop = clamp(
+    10 + (step2RevisionLoopGainPct / 0.025) * 25,
+    0,
+    35
+  );
+  const scoreCorrelation = clamp(
+    Math.max(0, choiceToSurvivalCorrelationCoord) * 25,
+    0,
+    20
+  );
+  const orphanPenalty = clamp(meanOrphanStealthCoord * 12, 0, 25);
   const coordScore = Math.round(
-    clamp(coordGainBase + stealthActivityBonus - orphanPenalty, 0, 100)
+    clamp(
+      scoreCoordTotal + scoreRevisionLoop + scoreCorrelation - orphanPenalty,
+      0,
+      100
+    )
   );
 
   // ---------------------------------------------------------------------------
-  // CRITÈRE 4 : ÉQUITÉ D'EXPOSITION SUR L'ŒIL (J1 .. JN) (/100)
+  // PILIER 4 : EFFICIENCE COGNITIVE & ÉQUITÉ SUR L'ŒIL (15%)
   // ---------------------------------------------------------------------------
   const playerLosses = coordSummary ? coordSummary.meanTreesLostPerPlayer : [];
   let j1VsOthersRatio = 1;
@@ -424,16 +576,24 @@ export function evaluateFourCriteria(
     playerLossSpread = (maxL - minL) / avgL;
   }
 
-  const ratioPenalty = Math.abs(j1VsOthersRatio - 1.15) * 35;
-  const spreadPenalty = Math.max(0, playerLossSpread - 0.30) * 30;
-  const fairnessScore = Math.round(clamp(100 - ratioPenalty - spreadPenalty, 0, 100));
+  const ratioPenalty = Math.abs(j1VsOthersRatio - 1.15) * 28;
+  const spreadPenalty = Math.max(0, playerLossSpread - 0.35) * 22;
+  const fogPenalty = Math.max(0, fogOfWarCostPct - 0.08) * 120;
+  const overkillPenalty = Math.max(0, meanTacticalOverkillCoord - 1.5) * 5;
+  const fairnessScore = Math.round(
+    clamp(
+      100 - ratioPenalty - spreadPenalty - fogPenalty - overkillPenalty,
+      0,
+      100
+    )
+  );
 
-  // Pondération globale recalibrée v3.2 :
-  // 35% Cible de survie [70%..82%] + 25% Gain Info Privée + 25% Gain Coordination + 15% Équité
+  // Pondération globale v3.3 :
+  // 25% Tension & Synergie HS + 30% Lecture I1+I2 + 30% Coordination & Boucle 2.2 + 15% Efficience & Équité
   const overallDesignScore = Math.round(
-    tensionScore * 0.35 +
-      privateInfoScore * 0.25 +
-      coordScore * 0.25 +
+    tensionScore * 0.25 +
+      privateInfoScore * 0.30 +
+      coordScore * 0.30 +
       fairnessScore * 0.15
   );
 
@@ -445,13 +605,13 @@ export function evaluateFourCriteria(
       meanSurvivalHorizon: survCoord,
       meanExplosionsPerGame,
       meanParryAndHSPerGame,
-      interpretation: `Survie Coord à ${(survCoord * 100).toFixed(1)}% (Cible [70%–82%]) · ${meanParryAndHSPerGame.toFixed(2)} mises HS et ${meanExplosionsPerGame.toFixed(2)} explosion(s)/partie.`,
+      interpretation: `Survie Coord à ${(survCoord * 100).toFixed(1)}% (Plage valide [45%–82%], optimal [50%–80%]) · ${meanParryAndHSPerGame.toFixed(2)} mises HS/p. (${params.parryHsRule ?? 'SYNERGY_TRAP_SAB'}).`,
     },
     privateInfoValue: {
       score: privateInfoScore,
-      deltaSoloVsBlind: privateInfoGainPct,
-      treesSavedByPrivateInfo: privateInfoGainTrees,
-      interpretation: `Gain Info Privée (Solo vs Aveugle) : ${privateInfoGainPct >= 0 ? '+' : ''}${(privateInfoGainPct * 100).toFixed(1)} pts (${privateInfoGainTrees >= 0 ? '+' : ''}${privateInfoGainTrees.toFixed(2)} arbres sauvés).`,
+      deltaSoloVsBlind: privateInfoTeamGainPct,
+      treesSavedByPrivateInfo: privateInfoTeamGainTrees,
+      interpretation: `Gain Lecture Prob. I2 : ${probabilisticReadingGainPct >= 0 ? '+' : ''}${(probabilisticReadingGainPct * 100).toFixed(1)} pts · Gain Dé Privé I1 en Équipe : ${privateInfoTeamGainPct >= 0 ? '+' : ''}${(privateInfoTeamGainPct * 100).toFixed(1)} pts (Solo I1 : ${privateInfoSoloGainPct >= 0 ? '+' : ''}${(privateInfoSoloGainPct * 100).toFixed(1)} pts).`,
     },
     coordinationEfficiency: {
       score: coordScore,
@@ -460,13 +620,13 @@ export function evaluateFourCriteria(
       trapsAndSabotagesPerGame: trapsSabPerGame,
       orphanStealthPerGame: meanOrphanStealthCoord,
       tacticalOverkillPerGame: meanTacticalOverkillCoord,
-      interpretation: `Gain Coordination (Coord vs Solo) : ${coordinationGainPct >= 0 ? '+' : ''}${(coordinationGainPct * 100).toFixed(1)} pts (${coordinationGainTrees >= 0 ? '+' : ''}${coordinationGainTrees.toFixed(2)} arbres) · ${trapsSabPerGame.toFixed(2)} pièges/sab., ${meanOrphanStealthCoord.toFixed(2)} furt. orpheline.`,
+      interpretation: `Gain Coord. I3 : ${coordinationGainPct >= 0 ? '+' : ''}${(coordinationGainPct * 100).toFixed(1)} pts (dont Boucle 2.2 : ${step2RevisionLoopGainPct >= 0 ? '+' : ''}${(step2RevisionLoopGainPct * 100).toFixed(1)} pts, ${meanStep2RevisionsCoord.toFixed(1)} rév./p.) · Corrélation Choix/Survie r = ${choiceToSurvivalCorrelationCoord.toFixed(2)}.`,
     },
     evilEyeFairness: {
       score: fairnessScore,
       j1VsOthersRatio,
       playerLossSpread,
-      interpretation: `Ratio de pertes J1 / Autres = ${j1VsOthersRatio.toFixed(2)}x · Coût du Brouillard (Omni - Coord) = ${(fogOfWarCostPct * 100).toFixed(1)} pts.`,
+      interpretation: `Coût du Brouillard (Omni - Coord) = ${(fogOfWarCostPct * 100).toFixed(1)} pts · Furt. Orpheline = ${meanOrphanStealthCoord.toFixed(2)} · Ratio J1/Autres = ${j1VsOthersRatio.toFixed(2)}x.`,
     },
     infoAndCoordMetrics,
     overallDesignScore,
@@ -489,7 +649,7 @@ export function evaluateVariantGames(
     const games = gamesByTableId.get(tc.id) ?? [];
     for (const g of games) {
       invariantViolationsCount += g.violations.length;
-      if (g.textualJournal && sampleTraces.length < 6) {
+      if (g.textualJournal && sampleTraces.length < 7) {
         sampleTraces.push({
           seed: g.seed,
           tableConfigName: tc.name,
@@ -518,16 +678,18 @@ export function evaluateVariantGames(
   };
 }
 
-export function generateCampaignMarkdownReport(campaign: CampaignRecord): string {
+export function generateCampaignMarkdownReport(
+  campaign: CampaignRecord
+): string {
   const lines: string[] = [];
   lines.push(
-    `# Rapport de Simulation Monte-Carlo — Amazonia v3.2 (Connaissance Privée, Coordination & Nouveaux Leviers)`
+    `# Rapport de Simulation Monte-Carlo — Amazonia v3.3 (Décomposition des 3 Sources d'Information I1/I2/I3, Boucle Révisable 2.2 & Synergie Mise HS)`
   );
   lines.push(`- **Campagne** : ${campaign.config.name} (\`${campaign.id}\`)`);
   lines.push(`- **Type** : \`${campaign.config.type}\``);
   lines.push(`- **Statut** : \`${campaign.status}\``);
   lines.push(
-    `- **Règles validées figées en dur (v3.2)** : \`D2-Double = true\`, \`CumulA2 = true\`, \`Régén = true\`, \`ActRep = true\`, \`PurgeSab = true\`, \`MaxN = true\`, Départ \`A & B en case 1 (NORMAL)\``
+    `- **Invariants figés v3.3** : \`a = 2\`, \`tacticsTrackPreset = 'ASSAULT_LOW'\` (\`[A1, B1, A2, B2, A3, B3]\`), \`bulldozerZeroStumpAction = 'DESTROY_TREE'\`, \`initialStumpCell2 = true\`, \`D2-Double = true\`, \`CumulA2 = true\`, \`Régén = true\`, \`ActRep(3.1) = true\`, \`PurgeSab = true\`, \`MaxN = true\``
   );
   lines.push(
     `- **Parties simulées** : ${campaign.progress.completedGames.toLocaleString('fr-FR')} / ${campaign.progress.totalTargetGames.toLocaleString('fr-FR')} (${campaign.progress.gamesPerSecond.toFixed(0)} parties/s)`
@@ -540,13 +702,13 @@ export function generateCampaignMarkdownReport(campaign: CampaignRecord): string
     );
 
     lines.push(
-      `## 1. Classement Synthétique des Variantes (Cible Survie Coord [70%–82%], Gain Info Privée & Coordination)`
+      `## 1. Classement Synthétique des Variantes v3.3 (7 Profils Orthogonaux & 5 Gains Décisionnels)`
     );
     lines.push(
-      `| ID | Variante (N, X, a & 5 Leviers v3.2) | Note Design (/100) | Survie Aveugle (%) | Survie Solo (%) | Survie Coord (%) | Survie Omni (%) | Gain Info Privée | Gain Coordination | Coût Brouillard | Furt. Orpheline | Overkill Tact. | Abattages (+Bull0) | Terrassements | Mises HS | Pièges+Sab. |`
+      `| ID | Variante (N, X, Cap, Shift, SynergieHS) | Note Design | 1.Aveugle | 2.Prob(I2) | 3.Solo(I1+I2) | 4.CoordSansDé | 5.Coord1Passe | 6.CoordRév(Réf) | 7.Omni | Gain I2 (Prob) | Gain I1 (Équipe) | Gain I3 (Coord) | Gain Rév.2.2 | Corrél. r | Mises HS | Furt. Orph. |`
     );
     lines.push(
-      `|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|`
+      `|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|`
     );
 
     for (const v of sorted) {
@@ -557,48 +719,55 @@ export function generateCampaignMarkdownReport(campaign: CampaignRecord): string
 
       if (!coordTable) continue;
 
-      const infoGainStr = `${m.privateInfoGainPct >= 0 ? '+' : ''}${(
-        m.privateInfoGainPct * 100
-      ).toFixed(1)}% (${m.privateInfoGainTrees >= 0 ? '+' : ''}${m.privateInfoGainTrees.toFixed(1)} arb.)`;
-      const coordGainStr = `${m.coordinationGainPct >= 0 ? '+' : ''}${(
-        m.coordinationGainPct * 100
-      ).toFixed(1)}% (${m.coordinationGainTrees >= 0 ? '+' : ''}${m.coordinationGainTrees.toFixed(1)} arb.)`;
-      const fogStr = `${(m.fogOfWarCostPct * 100).toFixed(1)}% (${m.fogOfWarCostTrees.toFixed(1)} arb.)`;
+      const fmtGain = (val: number) =>
+        `${val >= 0 ? '+' : ''}${(val * 100).toFixed(1)}%`;
 
       lines.push(
-        `| ${v.variantId} | ${v.variantLabel} | **${v.criteria.overallDesignScore}/100** | ${(m.survBlind * 100).toFixed(1)}% | ${(m.survSolo * 100).toFixed(1)}% | **${(m.survCoord * 100).toFixed(1)}%** | ${(m.survOmni * 100).toFixed(1)}% | ${infoGainStr} | ${coordGainStr} | ${fogStr} | ${m.meanOrphanStealthCoord.toFixed(2)} | ${m.meanTacticalOverkillCoord.toFixed(2)} | ${coordTable.meanCuts.toFixed(2)} (+${coordTable.meanBulldozerDestroyedTrees.toFixed(2)}) | ${coordTable.meanClearings.toFixed(2)} | ${coordTable.meanParryAndHS.toFixed(2)} | ${(coordTable.meanTrapsPlaced + coordTable.meanSabotagesPlaced).toFixed(2)} |`
+        `| ${v.variantId} | ${v.variantLabel} | **${v.criteria.overallDesignScore}/100** | ${(m.survBlind * 100).toFixed(1)}% | ${(m.survProbOnly * 100).toFixed(1)}% | ${(m.survSolo * 100).toFixed(1)}% | ${(m.survCoordNoDice * 100).toFixed(1)}% | ${(m.survCoordOneShot * 100).toFixed(1)}% | **${(m.survCoord * 100).toFixed(1)}%** | ${(m.survOmni * 100).toFixed(1)}% | ${fmtGain(m.probabilisticReadingGainPct)} | **${fmtGain(m.privateInfoTeamGainPct)}** | **${fmtGain(m.coordinationGainPct)}** | **${fmtGain(m.step2RevisionLoopGainPct)}** | ${m.choiceToSurvivalCorrelationCoord.toFixed(2)} | ${coordTable.meanParryAndHS.toFixed(2)} | ${m.meanOrphanStealthCoord.toFixed(2)} |`
       );
     }
     lines.push(``);
 
     lines.push(
-      `## 2. Analyse Détaillée de la Connaissance Privée & de la Coordination (Top 20 Variantes)`
+      `## 2. Décomposition Shapley des 5 Gains Décisionnels (Top 25 Variantes)`
     );
     lines.push(
-      `Cette section isole l'apport exact de la lecture du dé sous gobelet (**Gain Info Privée** = \`Survie Solo - Survie Aveugle\`), l'apport de la coordination tacite et de la Furtivité (**Gain Coordination** = \`Survie Coord - Survie Solo\`), et le **Coût du Brouillard** (\`Survie Omni - Survie Coord\`).`
+      `Cette section décompose la progression exacte du taux de survie entre le plancher aveugle et le plafond omniscient :\n` +
+        `1. **Gain Lecture Probabiliste ($I_2$)** = \`Surv(PROB_ONLY) - Surv(BLIND)\`\n` +
+        `2. **Gain Dé Privé en Solo ($I_1$ solo)** = \`Surv(SOLO_INFORMED) - Surv(PROB_ONLY)\`\n` +
+        `3. **Vrai Gain Marginal du Dé Privé en Équipe ($I_1$ équipe)** = \`Surv(COORD_HYBRID) - Surv(COORD_NO_DICE)\`\n` +
+        `4. **Gain Coordination 1-Passe ($I_3$ Étape 2.1)** = \`Surv(COORD_ONE_SHOT) - Surv(SOLO_INFORMED)\`\n` +
+        `5. **Gain Boucle Systémique de Révision 2.2 ($I_3$ Étape 2.2)** = \`Surv(COORD_HYBRID) - Surv(COORD_ONE_SHOT)\``
     );
     lines.push(``);
     lines.push(
-      `| ID | Variante | Survie Aveugle | Survie Solo | Gain Info Privée (% / Arbres) | Survie Coord | Gain Coordination (% / Arbres) | Survie Omni | Coût du Brouillard (% / Arbres) | Furtivité Orpheline (Coord) | Overkill Tactique (Solo → Coord) |`
+      `| ID | Variante | 1. Gain I2 (Prob vs Aveugle) | 2. Gain I1 Solo (Solo vs Prob) | 3. Gain I1 Équipe (CoordRév vs CoordSansDé) | 4. Gain Coord 1P (Coord1P vs Solo) | 5. Gain Boucle 2.2 (CoordRév vs Coord1P) | Révisions 2.2 / p. | Signaux Complétés / p. | Corrélation Choix/Survie r | Coût Brouillard (Omni - CoordRév) |`
     );
     lines.push(`|---|---|---|---|---|---|---|---|---|---|---|`);
 
-    for (const v of sorted.slice(0, 20)) {
+    for (const v of sorted.slice(0, 25)) {
       const m = v.criteria.infoAndCoordMetrics;
+      const fmtPts = (pct: number, trees: number) =>
+        `${pct >= 0 ? '+' : ''}${(pct * 100).toFixed(1)} pts (${trees >= 0 ? '+' : ''}${trees.toFixed(2)} arb.)`;
+
       lines.push(
-        `| ${v.variantId} | ${v.variantLabel} | ${(m.survBlind * 100).toFixed(1)}% (${m.treesLostBlind.toFixed(1)} perdus) | ${(m.survSolo * 100).toFixed(1)}% (${m.treesLostSolo.toFixed(1)} perdus) | **${m.privateInfoGainPct >= 0 ? '+' : ''}${(m.privateInfoGainPct * 100).toFixed(1)} pts** (${m.privateInfoGainTrees >= 0 ? '+' : ''}${m.privateInfoGainTrees.toFixed(2)} arb.) | **${(m.survCoord * 100).toFixed(1)}%** (${m.treesLostCoord.toFixed(1)} perdus) | **${m.coordinationGainPct >= 0 ? '+' : ''}${(m.coordinationGainPct * 100).toFixed(1)} pts** (${m.coordinationGainTrees >= 0 ? '+' : ''}${m.coordinationGainTrees.toFixed(2)} arb.) | ${(m.survOmni * 100).toFixed(1)}% (${m.treesLostOmni.toFixed(1)} perdus) | ${(m.fogOfWarCostPct * 100).toFixed(1)} pts (${m.fogOfWarCostTrees.toFixed(2)} arb.) | ${m.meanOrphanStealthCoord.toFixed(2)} / partie | ${m.meanTacticalOverkillSolo.toFixed(2)} → ${m.meanTacticalOverkillCoord.toFixed(2)} / partie |`
+        `| ${v.variantId} | ${v.variantLabel} | ${fmtPts(m.probabilisticReadingGainPct, m.probabilisticReadingGainTrees)} | ${fmtPts(m.privateInfoSoloGainPct, m.privateInfoSoloGainTrees)} | **${fmtPts(m.privateInfoTeamGainPct, m.privateInfoTeamGainTrees)}** | ${fmtPts(m.coordinationOneShotGainPct, m.coordinationOneShotGainTrees)} | **${fmtPts(m.step2RevisionLoopGainPct, m.step2RevisionLoopGainTrees)}** | ${m.meanStep2RevisionsCoord.toFixed(2)} | ${m.meanSignalCompletionsCoord.toFixed(2)} | **r = ${m.choiceToSurvivalCorrelationCoord.toFixed(2)}** | ${(m.fogOfWarCostPct * 100).toFixed(1)} pts (${m.fogOfWarCostTrees.toFixed(2)} arb.) |`
       );
     }
     lines.push(``);
 
-    lines.push(`## 3. Détail des Pertes par Tour (1..X) et par Joueur (J1..JN) sur Bot Coordonné`);
+    lines.push(
+      `## 3. Détail des Pertes par Tour (1..X) et par Joueur (J1..JN) sur Bot Coordonné Révisable`
+    );
     for (const v of sorted.slice(0, 8)) {
       const mainTable =
         v.tableSummaries.find((t) => t.tableConfigId === 'TABLE_COORD') ??
         v.tableSummaries[0];
       if (!mainTable) continue;
 
-      lines.push(`### ${v.variantId} — ${v.variantLabel} (Profil : ${mainTable.tableConfigName})`);
+      lines.push(
+        `### ${v.variantId} — ${v.variantLabel} (Profil : ${mainTable.tableConfigName})`
+      );
       lines.push(
         `- **Pertes par Tour (Moyenne ± σ)** : ` +
           mainTable.meanTreesLostPerTurn
@@ -623,13 +792,25 @@ export function generateCampaignMarkdownReport(campaign: CampaignRecord): string
 
   if (campaign.stressTelemetry) {
     const st = campaign.stressTelemetry;
-    lines.push(`## 4. Télémétrie Stress-Test Multi-Cœurs`);
-    lines.push(`- **Parties vérifiées** : ${st.totalGamesSimulated.toLocaleString('fr-FR')}`);
-    lines.push(`- **Tours simulés** : ${st.totalTurnsSimulated.toLocaleString('fr-FR')}`);
-    lines.push(`- **Violations d'invariants (I1..I4)** : ${st.violationsCount}`);
-    lines.push(`- **Explosions totales observées** : ${st.totalExplosionsObserved.toLocaleString('fr-FR')}`);
-    lines.push(`- **Mises HS défensives** : ${st.totalParryAndHSObserved.toLocaleString('fr-FR')}`);
-    lines.push(`- **Pièges & Sabotages posés** : ${st.totalTrapsAndSabotagesObserved.toLocaleString('fr-FR')}`);
+    lines.push(`## 4. Télémétrie Stress-Test Multi-Cœurs v3.3`);
+    lines.push(
+      `- **Parties vérifiées** : ${st.totalGamesSimulated.toLocaleString('fr-FR')}`
+    );
+    lines.push(
+      `- **Tours simulés** : ${st.totalTurnsSimulated.toLocaleString('fr-FR')}`
+    );
+    lines.push(
+      `- **Violations d'invariants (I1..I4)** : ${st.violationsCount}`
+    );
+    lines.push(
+      `- **Explosions totales observées** : ${st.totalExplosionsObserved.toLocaleString('fr-FR')}`
+    );
+    lines.push(
+      `- **Mises HS défensives** : ${st.totalParryAndHSObserved.toLocaleString('fr-FR')}`
+    );
+    lines.push(
+      `- **Pièges & Sabotages posés** : ${st.totalTrapsAndSabotagesObserved.toLocaleString('fr-FR')}`
+    );
   }
 
   return lines.join('\n');

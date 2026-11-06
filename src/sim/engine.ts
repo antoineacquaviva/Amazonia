@@ -22,7 +22,7 @@ import {
   resolveTargetPlayerRank1Based,
   TACTIC_META,
 } from './i18n';
-import { executePhase2Bots } from './bots';
+import { executePhase2BotsDetailed } from './bots';
 
 function isHarvesterCard(t: TacticType): boolean {
   return t === 'A1' || t === 'A2' || t === 'A3';
@@ -81,9 +81,10 @@ export function runSingleGame(
   const rng = new SeededRNG(seed);
   const N = params.numPlayers;
   const X = params.numTurns;
-  const a = params.initialTreesPerCell;
+  const a = params.initialTreesPerCell ?? 2;
   const shift = params.combatThresholdShift || 0;
   const cap = params.tacticalDefenderCap || 99;
+  const parryHsRule = params.parryHsRule ?? 'SYNERGY_TRAP_SAB';
 
   // Normalisation de la liste des bots (taille N)
   const botProfiles: BotProfileId[] = [];
@@ -91,20 +92,20 @@ export function runSingleGame(
     botProfiles.push(botProfilesInput[i % botProfilesInput.length] ?? 'COORD_HYBRID');
   }
 
-  // Configuration de la Piste des Tactiques (6 emplacements) selon tacticsTrackPreset
+  // Configuration de la Piste des Tactiques (6 emplacements) selon tacticsTrackPreset (défaut ASSAULT_LOW en v3.3)
   const presetTrack = params.tacticsTrackPreset
     ? resolveTacticsTrackFromPreset(params.tacticsTrackPreset)
     : params.tacticsTrackSetup;
   const tacticsTrack: TacticType[] =
     presetTrack && presetTrack.length === 6
       ? [...presetTrack]
-      : ['A3', 'B3', 'A2', 'B2', 'A1', 'B1'];
+      : ['A1', 'B1', 'A2', 'B2', 'A3', 'B3'];
 
   if (params.shuffleTacticsTrack) {
     rng.shuffleInPlace(tacticsTrack);
   }
 
-  // En v3.2, l'Abatteuse et le Bulldozer démarrent TOUJOURS ensemble en case 1 à l'état NORMAL
+  // En v3.3, l'Abatteuse et le Bulldozer démarrent TOUJOURS ensemble en case 1 à l'état NORMAL
   const allocatedCellsPerTrack = Math.max(X + 5, 16);
 
   // Initialisation des N groupes de forêt
@@ -189,6 +190,10 @@ export function runSingleGame(
   let tacticalDefendersPlaced = 0;
   let stealthDefendersPlaced = 0;
 
+  let step2RevisionsCount = 0;
+  let successfulSignalCompletionsCount = 0;
+  let sumTurnRelevanceScores = 0;
+
   let maxCellIndexVisited = 1;
 
   // Boucle principale des X tours
@@ -234,7 +239,15 @@ export function runSingleGame(
     // =========================================================================
     // PHASE 2 : MOBILISATION DES DÉFENSEURS (2 JETONS PAR JOUEUR)
     // =========================================================================
-    const placements = executePhase2Bots(params, players, draws, botProfiles, rng);
+    const phase2Res = executePhase2BotsDetailed(
+      params,
+      players,
+      draws,
+      botProfiles,
+      rng
+    );
+    const placements = phase2Res.decisions;
+    step2RevisionsCount += phase2Res.step2RevisionsCount;
 
     // Vérification Invariant I3 : chaque joueur pose exactement 2 jetons et respecte tacticalDefenderCap
     if (placements.length !== 2 * N) {
@@ -250,7 +263,6 @@ export function runSingleGame(
     for (const p of players) {
       for (const cell of p.cells) {
         if (cell.tacticalDefenders > cap) {
-          // Sécurité physique du moteur : plafonne au cap
           cell.tacticalDefenders = cap;
         }
       }
@@ -263,7 +275,6 @@ export function runSingleGame(
 
     // =========================================================================
     // PHASE 3 — ÉTAPE 3.1 : RÉVÉLATION, POSE DES CARTES & AVANCÉE DES MACHINES
-    // (ActRep = true et PurgeSab = true sont figés en dur en v3.2)
     // =========================================================================
     const initialStep31Status = players.map((p) => ({
       harvesterStatus: p.harvester.status,
@@ -272,13 +283,15 @@ export function runSingleGame(
       bulldozerPos: p.bulldozer.position,
     }));
 
-    // Regroupement des tirages par machine ciblée (targetPlayerIndex, machineType)
     const drawsCountByTargetMachine = new Map<string, number>();
     const drawsSeenIndexByTargetMachine = new Map<string, number>();
     for (const draw of draws) {
       const mType: MachineType = isHarvesterCard(draw.tactic) ? 'A' : 'B';
       const key = `${draw.targetPlayerIndex}-${mType}`;
-      drawsCountByTargetMachine.set(key, (drawsCountByTargetMachine.get(key) ?? 0) + 1);
+      drawsCountByTargetMachine.set(
+        key,
+        (drawsCountByTargetMachine.get(key) ?? 0) + 1
+      );
     }
 
     const cardPlacements: TurnTrace['cardPlacements'] = [];
@@ -301,7 +314,6 @@ export function runSingleGame(
           : initialStep31Status[draw.targetPlayerIndex].bulldozerPos;
 
       if (stBefore === 'DESTROYED' || posBefore === null) {
-        // Cas 1 : Machine DÉTRUITE -> aucun effet (Répit écologique)
         respiteDrawsOnDestroyedCount++;
         cardPlacements.push({
           fromPlayerIndex: draw.rollerPlayerIndex,
@@ -315,10 +327,9 @@ export function runSingleGame(
         });
       } else if (stBefore === 'HS') {
         if (totalHitsOnMachine >= 2) {
-          // ActRep (toujours actif en v3.2) :
-          // Si m >= 2 cartes ciblent cette machine HS, la 1re la répare immédiatement en 3.1 (et purge son Sabotage)
           if (hitIdx === 0) {
-            const machineObj = mType === 'A' ? targetPlayer.harvester : targetPlayer.bulldozer;
+            const machineObj =
+              mType === 'A' ? targetPlayer.harvester : targetPlayer.bulldozer;
             machineObj.status = 'NORMAL';
             repairsCount++;
             activeRepairsStep31Count++;
@@ -341,7 +352,6 @@ export function runSingleGame(
               sabotageClearedInStep31: sabCleared,
             });
           } else {
-            // Les (m - 1) cartes suivantes sont posées FACE VISIBLE en case p + 1
             const targetCellIdx = posBefore + 1;
             const cell = targetPlayer.cells[targetCellIdx - 1];
             cell.faceUpCards.push(draw.tactic);
@@ -358,7 +368,6 @@ export function runSingleGame(
             });
           }
         } else {
-          // Cas 2 standard (m == 1) : posée FACE CACHÉE sur la case actuelle p (réparée en 3.4)
           const cell = targetPlayer.cells[posBefore - 1];
           cell.faceDownCards.push(draw.tactic);
           cardPlacements.push({
@@ -374,7 +383,6 @@ export function runSingleGame(
           });
         }
       } else {
-        // Cas 3 : Machine EN ÉTAT NORMAL en case p -> posée FACE VISIBLE sur la case suivante p + 1
         const targetCellIdx = posBefore + 1;
         const cell = targetPlayer.cells[targetCellIdx - 1];
         cell.faceUpCards.push(draw.tactic);
@@ -391,10 +399,8 @@ export function runSingleGame(
       }
     }
 
-    // Avancée des machines en ÉTAT NORMAL ayant au moins 1 carte de leur type en p + 1
     const machineMoves: TurnTrace['machineMoves'] = [];
     for (const p of players) {
-      // Abatteuse A
       if (p.harvester.status === 'NORMAL' && p.harvester.position !== null) {
         const nextCellIdx = p.harvester.position + 1;
         const nextCell = p.cells[nextCellIdx - 1];
@@ -410,7 +416,6 @@ export function runSingleGame(
           });
         }
       }
-      // Bulldozer B
       if (p.bulldozer.status === 'NORMAL' && p.bulldozer.position !== null) {
         const nextCellIdx = p.bulldozer.position + 1;
         const nextCell = p.cells[nextCellIdx - 1];
@@ -428,20 +433,21 @@ export function runSingleGame(
       }
     }
 
-    // Track machines knocked HS during Step 3.2 to verify Invariant I1 in Step 3.4
     const knockedHSInCombatThisTurn = new Set<string>();
 
     // =========================================================================
-    // PHASE 3 — ÉTAPE 3.2 : RÉSOLUTION DES COMBATS (CARTES FACE VISIBLE)
+    // PHASE 3 — ÉTAPE 3.2 : RÉSOLUTION DES COMBATS (AVEC RÈGLE parryHsRule v3.3)
     // =========================================================================
     const combats: CombatCellLog[] = [];
+    let turnOverkillTokens = 0;
+    let turnUsefulTacticalTokensOnAttacked = 0;
 
     for (const p of players) {
       for (const cell of p.cells) {
         if (cell.faceUpCards.length === 0) {
-          // Tout Défenseur Tactique posé sur une case non attaquée compte comme Overkill Tactique
           if (cell.tacticalDefenders > 0) {
             tacticalOverkillTokensCount += cell.tacticalDefenders;
+            turnOverkillTokens += cell.tacticalDefenders;
           }
           continue;
         }
@@ -462,11 +468,25 @@ export function runSingleGame(
           (engagedB && p.bulldozer.hasSabotage ? 1 : 0);
         const defenseScoreS = cell.tacticalDefenders + trapBonus + sabotageBonus;
 
-        const assaultCountK = cell.faceUpCards.filter((t) => t === 'A3' || t === 'B3').length;
+        const assaultCountK = cell.faceUpCards.filter(
+          (t) => t === 'A3' || t === 'B3'
+        ).length;
         assaultTriggersCount += assaultCountK;
 
-        // Calcul de l'Overkill Tactique sur cette case attaquée (jetons au-delà du seuil de Mise HS 3 + k + shift)
-        const maxUsefulS = 3 + assaultCountK + shift;
+        const parryThreshold = 2 + assaultCountK + shift;
+        const standardHsThreshold = 3 + assaultCountK + shift;
+        const hasStealthSynergy = trapBonus + sabotageBonus >= 1;
+        const triggersHS =
+          defenseScoreS >= standardHsThreshold ||
+          (parryHsRule !== 'STANDARD_S3' &&
+            defenseScoreS >= parryThreshold &&
+            hasStealthSynergy);
+
+        // Calcul de l'Overkill Tactique en cohérence avec parryHsRule
+        const maxUsefulS =
+          parryHsRule !== 'STANDARD_S3' && hasStealthSynergy
+            ? parryThreshold
+            : standardHsThreshold;
         const maxUsefulTacticalDefenders = Math.max(
           0,
           maxUsefulS - (trapBonus + sabotageBonus)
@@ -476,6 +496,11 @@ export function runSingleGame(
           cell.tacticalDefenders - maxUsefulTacticalDefenders
         );
         tacticalOverkillTokensCount += tacticalOverkillOnCell;
+        turnOverkillTokens += tacticalOverkillOnCell;
+        turnUsefulTacticalTokensOnAttacked += Math.max(
+          0,
+          cell.tacticalDefenders - tacticalOverkillOnCell
+        );
 
         let outcome: CombatCellLog['outcome'];
         let harvesterExploded = false;
@@ -488,20 +513,16 @@ export function runSingleGame(
         let harvesterBecameHS = false;
         let bulldozerBecameHS = false;
 
-        if (defenseScoreS <= 1 + assaultCountK + shift) {
-          // CAS 1 : L'ATTAQUE RÉUSSIT (S <= 1 + k + shift)
+        if (defenseScoreS < parryThreshold) {
+          // CAS 1 : L'ATTAQUE RÉUSSIT (S < 2 + k + shift)
           outcome = 'ATTACK_SUCCESS';
 
-          // -------------------------------------------------------------------
-          // 4a. Résolution de l'Abatteuse ('A') si engagée sur c
-          // -------------------------------------------------------------------
           if (engagedA) {
             const nA1 = cell.faceUpCards.filter((t) => t === 'A1').length;
             const nA2 = cell.faceUpCards.filter((t) => t === 'A2').length;
             const nA3 = cell.faceUpCards.filter((t) => t === 'A3').length;
 
             if (nA2 >= 1 && nA3 >= 1) {
-              // EXPLOSION ABATTEUSE (Surchauffe A2 + Assaut A3)
               harvesterExploded = true;
               explosionsCount++;
               treesDestroyedByExplosion += cell.standingTrees;
@@ -512,16 +533,13 @@ export function runSingleGame(
               p.harvester.hasSabotage = false;
               cell.explodedHereThisTurn = true;
             } else {
-              // Option D2-Double figée en dur : A1, A2 et A3 incluent tous l'action de base Abattage
               const nAbattages = nA1 + nA2 + nA3;
-
               const cut = Math.min(cell.standingTrees, nAbattages);
               cell.standingTrees -= cut;
               cell.stumps += cut;
               treesCutToStumps += cut;
               cutsCount += cut;
 
-              // Effet spécial Surchauffe A2 (si nA2 >= 1, CumulA2 toujours actif)
               if (nA2 >= 1) {
                 overheatTriggersCount += nA2;
                 for (let r = 0; r < nA2; r++) {
@@ -540,7 +558,6 @@ export function runSingleGame(
                 knockedHSInCombatThisTurn.add(`${p.playerIndex}-A`);
               }
 
-              // Effet spécial Assaut A3 (si nA3 >= 1)
               if (nA3 >= 1) {
                 p.harvester.status = 'HS';
                 harvesterBecameHS = true;
@@ -549,16 +566,12 @@ export function runSingleGame(
             }
           }
 
-          // -------------------------------------------------------------------
-          // 4b. Résolution du Bulldozer ('B') si engagé sur c (APRÈS l'Abatteuse)
-          // -------------------------------------------------------------------
           if (engagedB) {
             const nB1 = cell.faceUpCards.filter((t) => t === 'B1').length;
             const nB2 = cell.faceUpCards.filter((t) => t === 'B2').length;
             const nB3 = cell.faceUpCards.filter((t) => t === 'B3').length;
 
             if (nB2 >= 1 && nB3 >= 1) {
-              // EXPLOSION BULLDOZER (Surchauffe B2 + Assaut B3)
               bulldozerExploded = true;
               explosionsCount++;
               treesDestroyedByExplosion += cell.standingTrees;
@@ -569,29 +582,24 @@ export function runSingleGame(
               p.bulldozer.hasSabotage = false;
               cell.explodedHereThisTurn = true;
             } else {
-              // Option D2-Double figée en dur : B1, B2 et B3 incluent tous l'action de base
               const nActionsB = nB1 + nB2 + nB3;
 
               if (nActionsB >= 1) {
-                // 1) Première action : Terrassement normal s'il y a au moins une souche
                 if (cell.stumps > 0) {
                   clearingsCount += 1;
                   stumpsCleared += cell.stumps;
                   stumpsClearedCount += cell.stumps;
                   cell.stumps = 0;
                 } else if (params.bulldozerZeroStumpAction === 'DESTROY_TREE') {
-                  // Si cell.stumps == 0 et 'DESTROY_TREE' : détruit définitivement 1 arbre debout sans créer de souche
                   if (cell.standingTrees > 0) {
                     cell.standingTrees -= 1;
                     bulldozerDestroyedTreeOnZeroStump += 1;
                     bulldozerDestroyedTreesCount += 1;
                   }
                 } else {
-                  // 'NONE' : le Terrassement tourne à vide
                   clearingsCount += 1;
                 }
 
-                // 2) Chaque action supplémentaire (nActionsB - 1) coupe 1 arbre debout en souche
                 if (nActionsB > 1) {
                   const extraCut = Math.min(cell.standingTrees, nActionsB - 1);
                   cell.standingTrees -= extraCut;
@@ -601,7 +609,6 @@ export function runSingleGame(
                 }
               }
 
-              // Effet spécial Surchauffe B2 (si nB2 >= 1, Cumul toujours actif)
               if (nB2 >= 1) {
                 overheatTriggersCount += nB2;
                 for (let r = 0; r < nB2; r++) {
@@ -620,7 +627,6 @@ export function runSingleGame(
                 knockedHSInCombatThisTurn.add(`${p.playerIndex}-B`);
               }
 
-              // Effet spécial Assaut B3 (si nB3 >= 1)
               if (nB3 >= 1) {
                 p.bulldozer.status = 'HS';
                 bulldozerBecameHS = true;
@@ -628,12 +634,8 @@ export function runSingleGame(
               }
             }
           }
-        } else if (defenseScoreS === 2 + assaultCountK + shift) {
-          // CAS 2 : PARADE SIMPLE (S == 2 + k + shift)
-          outcome = 'SIMPLE_PARRY';
-          simpleParriesCount++;
-        } else {
-          // CAS 3 : PARADE + MISE HORS SERVICE (S >= 3 + k + shift)
+        } else if (triggersHS) {
+          // CAS 3 : PARADE + MISE HORS SERVICE (S >= 3+k+shift OU Synergie Piège/Sabotage dès S >= 2+k+shift)
           outcome = 'PARRY_AND_HS';
           parryAndHSCount++;
           if (engagedA && p.harvester.status !== 'DESTROYED') {
@@ -646,9 +648,27 @@ export function runSingleGame(
             bulldozerBecameHS = true;
             knockedHSInCombatThisTurn.add(`${p.playerIndex}-B`);
           }
+        } else {
+          // CAS 2 : PARADE SIMPLE (S == 2 + k + shift sans Synergie Piège/Sabotage)
+          outcome = 'SIMPLE_PARRY';
+          simpleParriesCount++;
         }
 
-        // Nettoyage post-combat de la case c : retrait du Piège et des Sabotages des machines engagées
+        // Si un combat a abouti à une Parade ou Mise HS grâce à >= 1 jeton allié posé en 2.2 (complétion de signal), on incrémente successfulSignalCompletionsCount
+        if (outcome === 'SIMPLE_PARRY' || outcome === 'PARRY_AND_HS') {
+          const hasAllySupportIn22 = placements.some(
+            (pl) =>
+              pl.step === 2 &&
+              pl.track === 'TACTICAL' &&
+              pl.targetPlayerIndex === p.playerIndex &&
+              pl.cellIndex === c
+          );
+          if (hasAllySupportIn22 && cell.tacticalDefenders >= 1) {
+            successfulSignalCompletionsCount += 1;
+          }
+        }
+
+        // Nettoyage post-combat de la case c
         cell.hasTrap = false;
         if (engagedA) p.harvester.hasSabotage = false;
         if (engagedB) p.bulldozer.hasSabotage = false;
@@ -682,9 +702,9 @@ export function runSingleGame(
 
     // =========================================================================
     // PHASE 3 — ÉTAPE 3.3 : RÉSOLUTION DE LA PISTE FURTIVITÉ
-    // (MaxN = limitStealthTokensToN = true figé en dur en v3.2)
     // =========================================================================
     const stealthActions: StealthCellLog[] = [];
+    let turnSuccessfulStealthTokens = 0;
 
     for (const p of players) {
       for (const cell of p.cells) {
@@ -692,7 +712,6 @@ export function runSingleGame(
         const c = cell.cellIndex;
 
         if (cell.stealthDefenders === 1) {
-          // Furtivité Orpheline : 1 seul Défenseur posé sur cette case de Furtivité -> perdu sans effet
           orphanStealthTokensCount += 1;
           stealthActions.push({
             playerIndex: p.playerIndex,
@@ -708,7 +727,6 @@ export function runSingleGame(
           orphanStealthTokensCount += cell.stealthDefenders - 2;
         }
 
-        // Ordre de priorité : Abatteuse ('A') d'abord, puis Bulldozer ('B')
         const machinesPresentAfter: MachineState[] = [];
         if (p.harvester.status !== 'DESTROYED' && p.harvester.position === c) {
           machinesPresentAfter.push(p.harvester);
@@ -718,12 +736,14 @@ export function runSingleGame(
         }
 
         const wasOccupiedBefore =
-          p.harvester.startOfTurnPosition === c || p.bulldozer.startOfTurnPosition === c;
+          p.harvester.startOfTurnPosition === c ||
+          p.bulldozer.startOfTurnPosition === c;
 
         if (machinesPresentAfter.length >= 1) {
-          // Cas A : Sabotage (au moins une machine présente sur c après les mouvements)
           let activeTokens = countTotalActiveStealthTokens(players);
-          const unsabotagedMachines = machinesPresentAfter.filter((m) => !m.hasSabotage);
+          const unsabotagedMachines = machinesPresentAfter.filter(
+            (m) => !m.hasSabotage
+          );
 
           if (unsabotagedMachines.length > 0 && activeTokens >= N) {
             stealthFailuresCount++;
@@ -751,6 +771,8 @@ export function runSingleGame(
                 sabotagedTypes.push(m.type);
               }
             }
+            turnSuccessfulStealthTokens += 2;
+            successfulSignalCompletionsCount += 1;
             stealthActions.push({
               playerIndex: p.playerIndex,
               cellIndex: c,
@@ -764,7 +786,6 @@ export function runSingleGame(
           !wasOccupiedBefore &&
           !cell.explodedHereThisTurn
         ) {
-          // Cas B : Piège (case inoccupée tout au long du tour et sans explosion)
           const activeTokens = countTotalActiveStealthTokens(players);
           if (!cell.hasTrap && activeTokens >= N) {
             stealthFailuresCount++;
@@ -781,6 +802,8 @@ export function runSingleGame(
               cell.hasTrap = true;
               trapsPlacedCount++;
             }
+            turnSuccessfulStealthTokens += 2;
+            successfulSignalCompletionsCount += 1;
             stealthActions.push({
               playerIndex: p.playerIndex,
               cellIndex: c,
@@ -790,7 +813,6 @@ export function runSingleGame(
             });
           }
         } else {
-          // Cas C : Échec de la Furtivité (machine partie en 3.1 ou explosée en 3.2)
           stealthFailuresCount++;
           stealthActions.push({
             playerIndex: p.playerIndex,
@@ -805,7 +827,6 @@ export function runSingleGame(
 
     // =========================================================================
     // PHASE 3 — ÉTAPE 3.4 : RÉPARATION DES MACHINES HS & FIN DU TOUR
-    // (PurgeSab = repairClearsSabotage = true figé en dur en v3.2)
     // =========================================================================
     const repairs: RepairCellLog[] = [];
 
@@ -922,7 +943,7 @@ export function runSingleGame(
       }
     }
 
-    // Nettoyage de fin de tour (cartes et jetons Défenseurs retirés, Pièges et Sabotages conservés)
+    // Nettoyage de fin de tour
     for (const p of players) {
       for (const cell of p.cells) {
         cell.faceUpCards = [];
@@ -935,10 +956,34 @@ export function runSingleGame(
 
     // Calcul des arbres (potentiel écologique) perdus ce tour-ci par joueur
     const treesLostThisTurnPerPlayer = players.map((p, idx) =>
-      Math.max(0, ecologicalBeforeTurnPerPlayer[idx] - countEcologicalStockForPlayer(p))
+      Math.max(
+        0,
+        ecologicalBeforeTurnPerPlayer[idx] - countEcologicalStockForPlayer(p)
+      )
     );
-    const totalTreesLostThisTurn = treesLostThisTurnPerPlayer.reduce((acc, v) => acc + v, 0);
+    const totalTreesLostThisTurn = treesLostThisTurnPerPlayer.reduce(
+      (acc, v) => acc + v,
+      0
+    );
     treesLostPerTurn.push(totalTreesLostThisTurn);
+
+    // Calcul de la pertinence des poses de jetons du tour (placementRelevanceScore in [0, 1])
+    const effectiveTokensCount =
+      turnUsefulTacticalTokensOnAttacked + turnSuccessfulStealthTokens;
+    const tokenEfficiencyRatio = Math.max(
+      0,
+      Math.min(1, effectiveTokensCount / Math.max(1, 2 * N))
+    );
+    const parriedCombatsCount = combats.filter(
+      (cb) => cb.outcome === 'SIMPLE_PARRY' || cb.outcome === 'PARRY_AND_HS'
+    ).length;
+    const combatDefenseRatio =
+      combats.length > 0 ? parriedCombatsCount / combats.length : 1;
+    const turnRelevance = Math.max(
+      0,
+      Math.min(1, 0.55 * tokenEfficiencyRatio + 0.45 * combatDefenseRatio)
+    );
+    sumTurnRelevanceScores += turnRelevance;
 
     if (recordTraces) {
       traces.push({
@@ -980,23 +1025,34 @@ export function runSingleGame(
     }
   }
 
-  const finalStandingTreesPerPlayer = players.map((p) => countStandingTreesForPlayer(p));
-  const finalStandingTreesTotal = finalStandingTreesPerPlayer.reduce((acc, v) => acc + v, 0);
+  const finalStandingTreesPerPlayer = players.map((p) =>
+    countStandingTreesForPlayer(p)
+  );
+  const finalStandingTreesTotal = finalStandingTreesPerPlayer.reduce(
+    (acc, v) => acc + v,
+    0
+  );
 
-  // Perte calculée par rapport au stock initial réel d'arbres debout + souches régénérables
   const treesLostPerPlayer = players.map((_p, idx) =>
-    Math.max(0, initialEcologicalPotentialPerPlayer[idx] - finalStandingTreesPerPlayer[idx])
+    Math.max(
+      0,
+      initialEcologicalPotentialPerPlayer[idx] - finalStandingTreesPerPlayer[idx]
+    )
   );
   const totalTreesLost = treesLostPerPlayer.reduce((acc, v) => acc + v, 0);
 
-  // Ratio de survie sur l'horizon de référence N * X * a
   const survivalRateHorizon = Math.max(
     0,
-    Math.min(1, (referenceHorizonTrees - totalTreesLost) / referenceHorizonTrees)
+    Math.min(
+      1,
+      (referenceHorizonTrees - totalTreesLost) / referenceHorizonTrees
+    )
   );
 
-  // Ratio de survie sur les cases visitées (1 .. maxCellIndexVisited + 1)
-  const visitedCellHorizonPerTrack = Math.min(allocatedCellsPerTrack, maxCellIndexVisited + 1);
+  const visitedCellHorizonPerTrack = Math.min(
+    allocatedCellsPerTrack,
+    maxCellIndexVisited + 1
+  );
   const visitedInitialTrees = Math.max(1, N * visitedCellHorizonPerTrack * a);
   const survivalRateVisited = Math.max(
     0,
@@ -1008,6 +1064,10 @@ export function runSingleGame(
   );
 
   const victoryBracket = computeVictoryBracket(survivalRateHorizon);
+  const placementRelevanceScore = Math.max(
+    0,
+    Math.min(1, sumTurnRelevanceScores / Math.max(1, X))
+  );
 
   const result: SingleGameResult = {
     seed,
@@ -1048,6 +1108,9 @@ export function runSingleGame(
     respiteDrawsOnDestroyedCount,
     tacticalDefendersPlaced,
     stealthDefendersPlaced,
+    step2RevisionsCount,
+    successfulSignalCompletionsCount,
+    placementRelevanceScore,
     violations,
     traces: recordTraces ? traces : undefined,
   };
@@ -1060,28 +1123,36 @@ export function runSingleGame(
 }
 
 /**
- * Génère le Journal de Combat textuel détaillé ("Combat Log") d'une partie
+ * Génère le Journal de Combat textuel détaillé ("Combat Log" v3.3) d'une partie
  */
 export function formatGameCombatLog(game: SingleGameResult): string {
   const lines: string[] = [];
   const p = game.params;
 
-  lines.push(`================================================================================`);
-  lines.push(`JOURNAL DE COMBAT (COMBAT LOG v3.2) — GRAINE #${game.seed}`);
-  lines.push(`================================================================================`);
+  lines.push(
+    `================================================================================`
+  );
+  lines.push(
+    `JOURNAL DE COMBAT (COMBAT LOG v3.3) — GRAINE #${game.seed}`
+  );
+  lines.push(
+    `================================================================================`
+  );
   lines.push(
     `Paramètres : N=${p.numPlayers} joueurs | X=${p.numTurns} tours | a=${p.initialTreesPerCell} arbres/case | Horizon réf.=${game.referenceHorizonTrees} arbres`
   );
   lines.push(
-    `Leviers v3.2 : CapTactique=${p.tacticalDefenderCap === 99 ? 'Illimité(99)' : p.tacticalDefenderCap} | ShiftS=+${p.combatThresholdShift} | Bull0Souche=${p.bulldozerZeroStumpAction} | SoucheInitCase2(J1,J2)=${p.initialStumpCell2 ? 'Oui' : 'Non'} | Piste=${p.tacticsTrackPreset}`
+    `Leviers v3.3 : CapTactique=${p.tacticalDefenderCap === 99 ? 'Illimité(99)' : p.tacticalDefenderCap} | ShiftS=+${p.combatThresholdShift} | SynergieHS=${p.parryHsRule ?? 'SYNERGY_TRAP_SAB'} | Bull0Souche=${p.bulldozerZeroStumpAction} | SoucheInitCase2(J1,J2)=${p.initialStumpCell2 ? 'Oui' : 'Non'} | Piste=${p.tacticsTrackPreset}`
   );
   lines.push(
-    `Règles figées v3.2 : D2-Double=Oui | CumulA2=Oui | Régén=Oui | ActRep=Oui | PurgeSab=Oui | MaxN=Oui (${p.numPlayers} jetons) | Départ A&B en case 1`
+    `Invariants figés v3.3 : a=2 | ASSAULT_LOW | DESTROY_TREE | initialStumpCell2=true | D2-Double | CumulA2 | Régén | ActRep(3.1) | PurgeSab | MaxN(${p.numPlayers})`
   );
   lines.push(
     `Profils de Bots : ${game.botProfiles.map((b, i) => `J${i + 1}:${BOT_PROFILE_META[b]?.shortLabel ?? b}`).join(' | ')}`
   );
-  lines.push(`--------------------------------------------------------------------------------`);
+  lines.push(
+    `--------------------------------------------------------------------------------`
+  );
 
   if (!game.traces || game.traces.length === 0) {
     lines.push(`(Traces détaillées non enregistrées pour cette partie)`);
@@ -1090,17 +1161,23 @@ export function formatGameCombatLog(game: SingleGameResult): string {
 
   for (const t of game.traces) {
     lines.push(`\n▶ TOUR ${t.turn} / ${p.numTurns}`);
-    lines.push(`  [Phase 1 — Tirages Secrets 2D6 sous Gobelets]`);
+    lines.push(`  [Phase 1 — Tirages Secrets 2D6 sous Gobelets (Info Privée I1)]`);
     for (const d of t.draws) {
       lines.push(
         `    • J${d.rollerPlayerIndex + 1} lance (${d.d1}, ${d.d2}) → M=min(${d.d1},${d.d2})=${d.mIndex} [${d.tactic} - ${TACTIC_META[d.tactic].name}] | Cible : Piste J${d.targetPlayerIndex + 1}`
       );
     }
 
-    lines.push(`  [Phase 2 — Placement des Jetons Défenseurs]`);
+    lines.push(
+      `  [Phase 2 — Placement des Jetons Défenseurs & Boucle de Révision 2.2 (I1+I2+I3)]`
+    );
     for (const pl of t.placements) {
-      const stepLabel = pl.step === 1 ? 'Étape 2.1 (Sa forêt)' : 'Étape 2.2 (Soutien allié)';
-      const trackLabel = pl.track === 'TACTICAL' ? 'Piste Tactique' : 'Piste Furtivité';
+      const stepLabel =
+        pl.step === 1
+          ? 'Étape 2.1 (Sa forêt - Simultané)'
+          : `Étape 2.2 (Soutien allié - Ronde R${pl.revisionsRound ?? 1})`;
+      const trackLabel =
+        pl.track === 'TACTICAL' ? 'Piste Tactique' : 'Piste Furtivité';
       lines.push(
         `    • J${pl.playerIndex + 1} [${stepLabel}] → Piste J${pl.targetPlayerIndex + 1}, Case ${pl.cellIndex} (${trackLabel}) — ${pl.reason}`
       );
@@ -1132,17 +1209,25 @@ export function formatGameCombatLog(game: SingleGameResult): string {
       );
     }
 
-    lines.push(`  [Phase 3.2 — Résolution des Combats]`);
+    lines.push(
+      `  [Phase 3.2 — Résolution des Combats (Règle HS : ${p.parryHsRule ?? 'SYNERGY_TRAP_SAB'})]`
+    );
     if (t.combats.length === 0) {
       lines.push(`    • Aucun combat ce tour-ci.`);
     } else {
       for (const cb of t.combats) {
+        const hasSynergy = cb.trapBonus + cb.sabotageBonus >= 1;
         const outcomeFr =
           cb.outcome === 'ATTACK_SUCCESS'
             ? `ATTAQUE RÉUSSIE (S <= ${1 + cb.assaultCountK + cb.thresholdShift})`
             : cb.outcome === 'SIMPLE_PARRY'
             ? `PARADE SIMPLE (S == ${2 + cb.assaultCountK + cb.thresholdShift})`
-            : `PARADE + MISE HS (S >= ${3 + cb.assaultCountK + cb.thresholdShift})`;
+            : `PARADE + MISE HS (${
+                hasSynergy && (p.parryHsRule ?? 'SYNERGY_TRAP_SAB') !== 'STANDARD_S3'
+                  ? 'Synergie Piège/Sabotage dès S >= ' +
+                    (2 + cb.assaultCountK + cb.thresholdShift)
+                  : 'S >= ' + (3 + cb.assaultCountK + cb.thresholdShift)
+              })`;
         lines.push(
           `    • Piste J${cb.playerIndex + 1}, Case ${cb.cellIndex} | Cartes: [${cb.faceUpCards.join(', ')}] | S=${cb.defenseScoreS} (Déf:${cb.tacticalDefenders} + Piège:${cb.trapBonus} + Sab:${cb.sabotageBonus}) vs k=${cb.assaultCountK}, shift=+${cb.thresholdShift} ⇒ ${outcomeFr}`
         );
@@ -1151,16 +1236,23 @@ export function formatGameCombatLog(game: SingleGameResult): string {
           if (cb.harvesterExploded) details.push(`EXPLOSION Abatteuse A !`);
           if (cb.bulldozerExploded) details.push(`EXPLOSION Bulldozer B !`);
           if (cb.treesCutToStumps > 0)
-            details.push(`${cb.treesCutToStumps} arbre(s) abattu(s) en souche(s)`);
+            details.push(
+              `${cb.treesCutToStumps} arbre(s) abattu(s) en souche(s)`
+            );
           if (cb.bulldozerDestroyedTreeOnZeroStump > 0)
             details.push(
               `${cb.bulldozerDestroyedTreeOnZeroStump} arbre(s) debout détruit(s) par Bulldozer sur 0 souche`
             );
-          if (cb.stumpsCleared > 0) details.push(`${cb.stumpsCleared} souche(s) rasée(s)`);
+          if (cb.stumpsCleared > 0)
+            details.push(`${cb.stumpsCleared} souche(s) rasée(s)`);
           if (cb.treesRemovedByOverheat > 0)
-            details.push(`${cb.treesRemovedByOverheat} pion(s) retiré(s) par Surchauffe`);
+            details.push(
+              `${cb.treesRemovedByOverheat} pion(s) retiré(s) par Surchauffe`
+            );
           if (cb.treesDestroyedByExplosion > 0)
-            details.push(`${cb.treesDestroyedByExplosion} arbre(s) détruit(s) par Explosion`);
+            details.push(
+              `${cb.treesDestroyedByExplosion} arbre(s) détruit(s) par Explosion`
+            );
           if (cb.harvesterBecameHS) details.push(`Abatteuse A passe HS`);
           if (cb.bulldozerBecameHS) details.push(`Bulldozer B passe HS`);
           if (details.length > 0) {
@@ -1170,7 +1262,9 @@ export function formatGameCombatLog(game: SingleGameResult): string {
           const hsList: string[] = [];
           if (cb.harvesterBecameHS) hsList.push('Abatteuse A');
           if (cb.bulldozerBecameHS) hsList.push('Bulldozer B');
-          lines.push(`      ↳ Mise HS : ${hsList.join(', ') || 'Machines engagées'}`);
+          lines.push(
+            `      ↳ Mise HS : ${hsList.join(', ') || 'Machines engagées'}`
+          );
         }
       }
     }
@@ -1205,7 +1299,9 @@ export function formatGameCombatLog(game: SingleGameResult): string {
     }
 
     lines.push(`  [Phase 3.4 — Réparation des Machines HS (Cartes Face Cachée)]`);
-    const actualRepairs = t.repairs.filter((r) => r.harvesterRepaired || r.bulldozerRepaired);
+    const actualRepairs = t.repairs.filter(
+      (r) => r.harvesterRepaired || r.bulldozerRepaired
+    );
     if (actualRepairs.length === 0) {
       lines.push(`    • Aucune machine réparée en 3.4 ce tour-ci.`);
     } else {
@@ -1232,9 +1328,13 @@ export function formatGameCombatLog(game: SingleGameResult): string {
     );
   }
 
-  lines.push(`\n================================================================================`);
+  lines.push(
+    `\n================================================================================`
+  );
   lines.push(`BILAN FINAL DE LA PARTIE (GRAINE #${game.seed})`);
-  lines.push(`================================================================================`);
+  lines.push(
+    `================================================================================`
+  );
   lines.push(
     `• Régénération Écologique de fin de partie : +${game.regeneratedTreesCount} arbre(s) debout régénéré(s)`
   );
@@ -1251,7 +1351,10 @@ export function formatGameCombatLog(game: SingleGameResult): string {
     `• Statistiques Combat : ${game.cutsCount} abattages | ${game.bulldozerDestroyedTreesCount} arbres détruits Bull0 | ${game.clearingsCount} terrassements (${game.stumpsClearedCount} souches) | ${game.overheatTriggersCount} surchauffes | ${game.assaultTriggersCount} assauts | ${game.explosionsCount} explosions`
   );
   lines.push(
-    `• Statistiques Défense & Coordination : ${game.simpleParriesCount} parades simples | ${game.parryAndHSCount} mises HS | ${game.trapsPlacedCount} pièges | ${game.sabotagesPlacedCount} sabotages | ${game.orphanStealthTokensCount} furtivité(s) orpheline(s) | ${game.tacticalOverkillTokensCount} overkill(s) tactique(s)`
+    `• Statistiques Défense & Coordination v3.3 : ${game.simpleParriesCount} parades simples | ${game.parryAndHSCount} mises HS | ${game.trapsPlacedCount} pièges | ${game.sabotagesPlacedCount} sabotages | ${game.orphanStealthTokensCount} furtivité(s) orpheline(s) | ${game.tacticalOverkillTokensCount} overkill(s) tactique(s)`
+  );
+  lines.push(
+    `• Télémétrie Cognitive 2.2 : ${game.step2RevisionsCount} révision(s) du 2e jeton | ${game.successfulSignalCompletionsCount} signal/signaux complété(s) | Pertinence des poses = ${(game.placementRelevanceScore * 100).toFixed(1)}%`
   );
 
   return lines.join('\n');

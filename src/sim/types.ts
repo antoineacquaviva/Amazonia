@@ -7,17 +7,21 @@ export type TacticalDefenderCap = 99 | 2 | 1;
 export type CombatThresholdShift = 0 | 1;
 export type BulldozerZeroStumpAction = 'NONE' | 'DESTROY_TREE';
 export type TacticsTrackPreset = 'ASSAULT_HIGH' | 'ASSAULT_LOW';
+export type ParryHsRule = 'STANDARD_S3' | 'SYNERGY_TRAP_SAB';
 
 export type BotProfileId =
-  | 'BLIND'         // 1. Bot Aveugle (Sans info privée, sans coordination)
-  | 'SOLO_INFORMED' // 2. Bot Informé Solo (Avec info privée, zéro coordination)
-  | 'COORD_HYBRID'  // 3. Bot Coordonné Hybride (Info privée + Coordination tacite — Référence)
-  | 'OMNISCIENT';   // 4. Bot Omniscient (Table ouverte / Plafond théorique)
+  | 'BLIND'           // 1. Bot Aveugle Naïf (Aucune info : I1=0, I2=0, I3=0)
+  | 'PROB_ONLY'       // 2. Bot Lecteur Probabiliste (I2 seule : I1=0, I2=1, I3=0)
+  | 'SOLO_INFORMED'   // 3. Bot Solo Bayésien (I1 + I2, zéro coordination : I3=0)
+  | 'COORD_NO_DICE'   // 4. Bot Coordonné Sans Dé (I2 + I3 avec boucle 2.2, sans I1)
+  | 'COORD_ONE_SHOT'  // 5. Bot Coordonné 1-Passe (I1 + I2 + I3 sans révision 2.2)
+  | 'COORD_HYBRID'    // 6. Bot Coordonné Révisable Bayésien (I1 + I2 + I3 avec révision 2.2 — RÉFÉRENCE)
+  | 'OMNISCIENT';     // 7. Bot Omniscient (Plafond théorique à table ouverte)
 
 export interface InitialMachineConfig {
-  harvesterPos: number;           // Case initiale Abatteuse (toujours 1 en v3.2)
+  harvesterPos: number;           // Case initiale Abatteuse (toujours 1 en v3.3)
   harvesterStatus: 'NORMAL' | 'HS';
-  bulldozerPos: number;           // Case initiale Bulldozer (toujours 1 en v3.2)
+  bulldozerPos: number;           // Case initiale Bulldozer (toujours 1 en v3.3)
   bulldozerStatus: 'NORMAL' | 'HS';
   initialStumpsCell1: number;     // Souches initiales en case 1 (>= 0)
 }
@@ -25,17 +29,18 @@ export interface InitialMachineConfig {
 export interface SimulationConfig {
   numPlayers: number;                            // N in {3, 4, 5, 6}
   numTurns: number;                              // X in {6, 7, 8, 9, 10, 12}
-  initialTreesPerCell: number;                   // a in {2, 3}
-  tacticsTrackPreset: TacticsTrackPreset;        // 'ASSAULT_HIGH' | 'ASSAULT_LOW'
+  initialTreesPerCell: number;                   // a in {2, 3} (défaut 2 en v3.3)
+  tacticsTrackPreset: TacticsTrackPreset;        // 'ASSAULT_LOW' par défaut en v3.3
   tacticsTrackSetup: TacticType[];               // Déduit du preset (ou personnalisé)
   shuffleTacticsTrack: boolean;                  // Si true, mélange tacticsTrackSetup en début de partie
   initialMachinesState?: InitialMachineConfig[]; // Optionnel
 
-  // 4 Nouveaux Leviers d'Équilibrage v3.2 (+ tacticsTrackPreset ci-dessus)
+  // Leviers d'Équilibrage v3.3
   tacticalDefenderCap: TacticalDefenderCap;           // 1. Plafond Défenseurs Tactiques par case : 99 (Sans limite), 2 (Max 2), 1 (Max 1)
   combatThresholdShift: CombatThresholdShift;         // 2. Décalage des seuils S : 0 ou +1
-  bulldozerZeroStumpAction: BulldozerZeroStumpAction; // 3. Action Bulldozer si 0 souche : 'NONE' ou 'DESTROY_TREE'
-  initialStumpCell2: boolean;                         // 4. Si true : case 2 de J1 et J2 démarre avec 1 souche et a-1 arbres debout
+  bulldozerZeroStumpAction: BulldozerZeroStumpAction; // 3. Action Bulldozer si 0 souche : 'DESTROY_TREE' figé par défaut
+  initialStumpCell2: boolean;                         // 4. Si true (figé par défaut) : case 2 de J1 et J2 démarre avec 1 souche et a-1 arbres debout
+  parryHsRule?: ParryHsRule;                          // 5. Règle de Mise HS : 'SYNERGY_TRAP_SAB' (défaut) ou 'STANDARD_S3'
 }
 
 export type GameParameters = SimulationConfig;
@@ -84,6 +89,7 @@ export interface DefenderPlacementDecision {
   cellIndex: number;              // Case c >= 1
   track: DefenderTrackType;       // 'TACTICAL' ou 'STEALTH'
   reason: string;
+  revisionsRound?: number;        // Ronde de révision finale en Étape 2.2 (1..4)
 }
 
 export interface CombatCellLog {
@@ -220,7 +226,7 @@ export interface SingleGameResult {
   overheatTreesRemovedCount: number;         // Nombre de pions retirés par Surchauffe
   assaultTriggersCount: number;              // Nombre de cartes Assaut (A3/B3) résolues en combat
   simpleParriesCount: number;                // Nombre de Parades simples (S == 2 + k + shift)
-  parryAndHSCount: number;                   // Nombre de Parades + Mise HS (S >= 3 + k + shift)
+  parryAndHSCount: number;                   // Nombre de Parades + Mise HS
   explosionsCount: number;                   // Nombre d'Explosions (A2+A3 ou B2+B3)
   trapsPlacedCount: number;                  // Nombre de Pièges posés en Furtivité
   sabotagesPlacedCount: number;              // Nombre de Sabotages posés en Furtivité
@@ -234,6 +240,11 @@ export interface SingleGameResult {
   respiteDrawsOnDestroyedCount: number;      // Nombre de tirages sans effet sur machine détruite
   tacticalDefendersPlaced: number;
   stealthDefendersPlaced: number;
+
+  // Métriques cognitives et de coordination v3.3
+  step2RevisionsCount: number;               // Nombre de révisions (déplacements du 2e jeton temporaire en 2.2)
+  successfulSignalCompletionsCount: number;  // Signaux émis en 2.1 ou 2.2 r1 sur menace réelle et complétés par un allié
+  placementRelevanceScore: number;           // Ratio [0, 1] de pertinence des poses par rapport au gain maximal d'arbres possible
 
   violations: InvariantViolationReport[];
   traces?: TurnTrace[];
@@ -283,30 +294,60 @@ export interface TableConfigSummary {
   meanActiveRepairsStep31: number;
   meanSabotageClearedByRepair: number;
   meanRespiteDraws: number;
+
+  // Moyennes cognitives et corrélation v3.3
+  meanStep2Revisions: number;
+  meanSuccessfulSignalCompletions: number;
+  meanPlacementRelevanceScore: number;
+  choiceToSurvivalCorrelation: number;
 }
 
 export interface InformationAndCoordinationMetrics {
-  survBlind: number;               // Taux de survie Bot Aveugle (0..1)
-  survSolo: number;                // Taux de survie Bot Informé Solo (0..1)
-  survCoord: number;               // Taux de survie Bot Coordonné Hybride (0..1) — Référence
-  survOmni: number;                // Taux de survie Bot Omniscient (0..1)
+  survBlind: number;               // 1. Taux de survie Bot Aveugle Naïf (0..1)
+  survProbOnly: number;            // 2. Taux de survie Bot Lecteur Probabiliste (I2 seule)
+  survSolo: number;                // 3. Taux de survie Bot Solo Bayésien (I1 + I2)
+  survCoordNoDice: number;         // 4. Taux de survie Bot Coordonné Sans Dé (I2 + I3)
+  survCoordOneShot: number;        // 5. Taux de survie Bot Coordonné 1-Passe (I1 + I2 + I3 sans révision 2.2)
+  survCoord: number;               // 6. Taux de survie Bot Coordonné Révisable (I1 + I2 + I3 avec boucle 2.2 — Référence)
+  survOmni: number;                // 7. Taux de survie Bot Omniscient (Plafond théorique)
+
   treesLostBlind: number;
+  treesLostProbOnly: number;
   treesLostSolo: number;
+  treesLostCoordNoDice: number;
+  treesLostCoordOneShot: number;
   treesLostCoord: number;
   treesLostOmni: number;
-  privateInfoGainPct: number;      // Survie Solo - Survie Aveugle (en ratio 0..1)
-  privateInfoGainTrees: number;    // Arbres sauvés grâce à l'info privée (lostBlind - lostSolo)
-  coordinationGainPct: number;     // Survie Coord - Survie Solo (en ratio 0..1)
-  coordinationGainTrees: number;   // Arbres sauvés grâce à la coordination & furtivité (lostSolo - lostCoord)
-  fogOfWarCostPct: number;         // Survie Omni - Survie Coord (en ratio 0..1)
-  fogOfWarCostTrees: number;       // Arbres perdus à cause du brouillard (lostCoord - lostOmni)
-  meanOrphanStealthCoord: number;  // Furtivité Orpheline moyenne (Bot Coordonné)
-  meanTacticalOverkillCoord: number; // Overkill Tactique moyen (Bot Coordonné)
-  meanTacticalOverkillSolo: number;  // Overkill Tactique moyen (Bot Solo)
+
+  // Les 5 Gains Décisionnels v3.3
+  probabilisticReadingGainPct: number;   // 1. Surv(PROB_ONLY) - Surv(BLIND) (Apport I2)
+  probabilisticReadingGainTrees: number; // Arbres sauvés par la lecture probabiliste I2
+  privateInfoSoloGainPct: number;        // 2. Surv(SOLO_INFORMED) - Surv(PROB_ONLY) (Apport I1 en solo)
+  privateInfoSoloGainTrees: number;
+  privateInfoTeamGainPct: number;        // 3. Surv(COORD_HYBRID) - Surv(COORD_NO_DICE) (Vrai apport marginal de I1 en équipe coordonnée)
+  privateInfoTeamGainTrees: number;
+  privateInfoGainPct: number;            // Gain réel de I1 en équipe coordonnée (= survCoord - survCoordNoDice)
+  privateInfoGainTrees: number;          // Arbres sauvés grâce à I1 en équipe (= treesLostCoordNoDice - treesLostCoord)
+  coordinationOneShotGainPct: number;    // 4. Surv(COORD_ONE_SHOT) - Surv(SOLO_INFORMED) (Apport lecture 2.1)
+  coordinationOneShotGainTrees: number;
+  step2RevisionLoopGainPct: number;      // 5. Surv(COORD_HYBRID) - Surv(COORD_ONE_SHOT) (Apport boucle révisable 2.2)
+  step2RevisionLoopGainTrees: number;
+  step2RevisionGainPct: number;          // Alias = step2RevisionLoopGainPct
+  coordinationGainPct: number;           // Gain total de I3 : Surv(COORD_HYBRID) - Surv(SOLO_INFORMED)
+  coordinationGainTrees: number;         // Arbres sauvés grâce à la coordination totale I3
+  fogOfWarCostPct: number;               // Surv(OMNISCIENT) - Surv(COORD_HYBRID)
+  fogOfWarCostTrees: number;             // Arbres perdus à cause du brouillard (lostCoord - lostOmni)
+
+  meanOrphanStealthCoord: number;        // Furtivité Orpheline moyenne (Bot Coordonné Révisable)
+  meanTacticalOverkillCoord: number;     // Overkill Tactique moyen (Bot Coordonné Révisable)
+  meanTacticalOverkillSolo: number;      // Overkill Tactique moyen (Bot Solo)
+  meanStep2RevisionsCoord: number;       // Révisions 2.2 moyennes par partie (Bot Coordonné Révisable)
+  meanSignalCompletionsCoord: number;    // Signaux complétés moyens par partie (Bot Coordonné Révisable)
+  choiceToSurvivalCorrelationCoord: number; // Corrélation de Pearson r entre pertinence des poses et survie
 }
 
 export interface FourCriteriaEvaluation {
-  // 1. Cible de Difficulté & Tension (Survie Coord dans [70% .. 82%]) (/100)
+  // 1. Tension, Difficulté & Synergie HS [45%..82%, optimal 50%..80%] (25%)
   tensionAndAttrition: {
     score: number;
     survivalTargetProximityScore: number; // /70
@@ -316,14 +357,14 @@ export interface FourCriteriaEvaluation {
     meanParryAndHSPerGame: number;
     interpretation: string;
   };
-  // 2. Valeur de la Connaissance Privée (Survie Solo - Survie Aveugle >= +5%) (/100)
+  // 2. Récompense de la Lecture des Intentions I1 + I2 (30%)
   privateInfoValue: {
     score: number;
     deltaSoloVsBlind: number;
     treesSavedByPrivateInfo: number;
     interpretation: string;
   };
-  // 3. Valeur de la Coordination & Furtivité (Survie Coord - Survie Solo >= +5%) (/100)
+  // 3. Récompense de la Coordination & Boucle Révisable I3 (30%)
   coordinationEfficiency: {
     score: number;
     deltaCoordVsSolo: number;
@@ -333,7 +374,7 @@ export interface FourCriteriaEvaluation {
     tacticalOverkillPerGame: number;
     interpretation: string;
   };
-  // 4. Équité d'Exposition sur l'Œil (J1 .. JN) (/100)
+  // 4. Efficience Cognitive & Équité sur l'Œil (15%)
   evilEyeFairness: {
     score: number;
     j1VsOthersRatio: number;
@@ -347,7 +388,7 @@ export interface FourCriteriaEvaluation {
 export interface VariantEvaluationResult {
   variantId: string;
   variantLabel: string;
-  leversCode: string; // ex: "Cap:2 · Shift:+0 · Bull0:DESTROY_TREE · StumpC2:Oui · Piste:ASSAULT_HIGH"
+  leversCode: string; // ex: "Cap:2 · Shift:+0 · SynergieHS:SYNERGY_TRAP_SAB · Bull0:DESTROY_TREE · StumpC2:Oui · Piste:ASSAULT_LOW"
   params: SimulationConfig;
   tableSummaries: TableConfigSummary[];
   criteria: FourCriteriaEvaluation;
@@ -366,12 +407,13 @@ export interface VariantEvaluationResult {
 export interface ParameterSweepInput {
   numPlayersValues: number[];                         // défaut [3, 4, 5, 6]
   numTurnsValues: number[];                           // défaut [6, 7, 8, 9, 10, 12]
-  initialTreesPerCellValues: number[];                // défaut [2, 3]
-  tacticalDefenderCapValues: TacticalDefenderCap[];   // défaut [99, 2, 1]
-  combatThresholdShiftValues: CombatThresholdShift[]; // défaut [0, 1]
-  bulldozerZeroStumpActionValues: BulldozerZeroStumpAction[]; // défaut ['NONE', 'DESTROY_TREE']
-  initialStumpCell2Values: boolean[];                 // défaut [false, true]
-  tacticsTrackPresetValues: TacticsTrackPreset[];     // défaut ['ASSAULT_HIGH', 'ASSAULT_LOW']
+  initialTreesPerCellValues: number[];                // défaut [2] en v3.3
+  tacticalDefenderCapValues: TacticalDefenderCap[];   // défaut [1, 2] en v3.3
+  combatThresholdShiftValues: CombatThresholdShift[]; // défaut [0, 1] en v3.3
+  bulldozerZeroStumpActionValues: BulldozerZeroStumpAction[]; // défaut ['DESTROY_TREE'] en v3.3
+  initialStumpCell2Values: boolean[];                 // défaut [true] en v3.3
+  tacticsTrackPresetValues: TacticsTrackPreset[];     // défaut ['ASSAULT_LOW'] en v3.3
+  parryHsRuleValues?: ParryHsRule[];                  // défaut ['SYNERGY_TRAP_SAB', 'STANDARD_S3'] en v3.3
   shuffleTacticsTrackValues: boolean[];               // défaut [false]
 }
 

@@ -86,16 +86,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-10 text-center">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
-          Aucune campagne Monte-Carlo v3.2 disponible
+          Aucune campagne Monte-Carlo v3.3 disponible
         </h2>
         <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
-          Configurez et lancez une campagne de simulation v3.2 sur les leviers de difficulté et la connaissance privée.
+          Configurez et lancez une campagne de simulation v3.3 sur les 7 profils de Bots orthogonaux et la synergie Mise HS.
         </p>
         <button
           onClick={onNavigateToBuilder}
           className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-medium rounded-md transition-colors cursor-pointer"
         >
-          Configurer une Campagne Monte-Carlo v3.2
+          Configurer une Campagne Monte-Carlo v3.3
         </button>
       </div>
     );
@@ -206,15 +206,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         )}
       </div>
 
-      {/* SECTION 1 : TABLEAU COMPARATIF DES VARIANTES v3.2 & CONNAISSANCE PRIVÉE / COORDINATION */}
+      {/* SECTION 1 : TABLEAU COMPARATIF DES VARIANTES v3.3 (7 PROFILS DE BOTS & 5 GAINS DÉCISIONNELS) */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              1. Classement des Variantes v3.2 — Leviers de Difficulté & Analyse Connaissance Privée / Coordination
+              1. Classement des Variantes v3.3 — 7 Bots Orthogonaux (I1, I2, I3) & 5 Gains Décisionnels
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Règles figées : D2-Double, CumulA2, Régén, ActRep (3.1), PurgeSab, MaxN, Départ Case 1. Cible de survie Coordonnée : 70 % – 82 %. Cliquez sur une ligne pour l'inspecter.
+              Invariants v3.3 figés par défaut : a=2, ASSAULT_LOW, Bull0=-1Arb, StumpC2=Oui. Fenêtre de survie valide : 45 % – 82 % (Plateau optimal : 50 % – 80 %). Cliquez sur une ligne pour l'inspecter.
             </p>
           </div>
           <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
@@ -226,20 +226,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
-                <th className="py-2.5 px-3">ID</th>
-                <th className="py-2.5 px-3">Variante & Leviers v3.2</th>
-                <th className="py-2.5 px-3 text-right">Note Design</th>
-                <th className="py-2.5 px-3 text-right">Survie Aveugle</th>
-                <th className="py-2.5 px-3 text-right">Survie Solo</th>
-                <th className="py-2.5 px-3 text-right">Survie Coord</th>
-                <th className="py-2.5 px-3 text-right">Survie Omni</th>
-                <th className="py-2.5 px-3 text-right">Gain Info Privée</th>
-                <th className="py-2.5 px-3 text-right">Gain Coordination</th>
-                <th className="py-2.5 px-3 text-right">Coût Brouillard</th>
-                <th className="py-2.5 px-3 text-right">Arbres Perdus (Coord)</th>
-                <th className="py-2.5 px-3 text-right">Furt. Orpheline</th>
-                <th className="py-2.5 px-3 text-right">Overkill Tact.</th>
-                <th className="py-2.5 px-3 text-right">Mises HS / Expl.</th>
+                <th className="py-2.5 px-2.5">ID</th>
+                <th className="py-2.5 px-2.5">Variante & Leviers v3.3</th>
+                <th className="py-2.5 px-2 text-right">Note</th>
+                <th className="py-2.5 px-2 text-right" title="1. Bot Aveugle (0 info)">1.Aveugle</th>
+                <th className="py-2.5 px-2 text-right" title="2. Bot Lecteur Probabiliste (I2 seule)">2.Prob(I2)</th>
+                <th className="py-2.5 px-2 text-right" title="3. Bot Solo Bayésien (I1+I2)">3.Solo</th>
+                <th className="py-2.5 px-2 text-right" title="4. Bot Coordonné Sans Dé (I2+I3, sans I1)">4.SansDé</th>
+                <th className="py-2.5 px-2 text-right" title="5. Bot Coordonné 1-Passe (I1+I2+I3 sans révision 2.2)">5.Coord1P</th>
+                <th className="py-2.5 px-2 text-right" title="6. Bot Coordonné Révisable (I1+I2+I3 avec boucle 2.2)">6.CoordRév</th>
+                <th className="py-2.5 px-2 text-right" title="7. Bot Omniscient (Plafond table ouverte)">7.Omni</th>
+                <th className="py-2.5 px-2 text-right" title="Gain I2 = Prob - Aveugle">Gain I2</th>
+                <th className="py-2.5 px-2 text-right" title="Gain I1 Équipe = CoordRév - CoordSansDé">Gain I1 Éq.</th>
+                <th className="py-2.5 px-2 text-right" title="Gain Coord 1-Passe = Coord1P - Solo">Gain Coord1P</th>
+                <th className="py-2.5 px-2 text-right" title="Gain Boucle 2.2 = CoordRév - Coord1P">Gain B.2.2</th>
+                <th className="py-2.5 px-2 text-right" title="Révisions 2.2 / Signaux complétés / Corrélation r">Rév.2.2 / r</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
@@ -253,6 +254,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 const ic = v.criteria.infoAndCoordMetrics;
                 const capStr = v.params.tacticalDefenderCap >= 99 ? '∞' : String(v.params.tacticalDefenderCap);
                 const shiftStr = `+${v.params.combatThresholdShift}`;
+                const parryRule = v.params.parryHsRule ?? 'SYNERGY_TRAP_SAB';
+                const parryStr = parryRule === 'SYNERGY_TRAP_SAB' ? 'SynergieHS' : 'StandardS3';
                 const bullStr = v.params.bulldozerZeroStumpAction === 'DESTROY_TREE' ? '-1Arb' : '0';
                 const pStr = v.params.tacticsTrackPreset === 'ASSAULT_HIGH' ? 'A3B3↑' : 'A1B1↑';
 
@@ -266,10 +269,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                     }`}
                   >
-                    <td className="py-2.5 px-3 font-mono font-semibold text-emerald-800 dark:text-emerald-400">
+                    <td className="py-2.5 px-2.5 font-mono font-semibold text-emerald-800 dark:text-emerald-400">
                       {v.variantId}
                     </td>
-                    <td className="py-2.5 px-3">
+                    <td className="py-2.5 px-2.5">
                       <div className="font-semibold text-slate-900 dark:text-slate-100">
                         N={v.params.numPlayers} · X={v.params.numTurns}t · a={v.params.initialTreesPerCell}
                       </div>
@@ -282,77 +285,73 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         </span>
                         <span
                           className={`px-1.5 py-0.5 text-[10px] font-mono rounded border ${
-                            v.params.bulldozerZeroStumpAction === 'DESTROY_TREE'
-                              ? 'bg-amber-100/70 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                            parryRule === 'SYNERGY_TRAP_SAB'
+                              ? 'bg-emerald-100/80 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700'
                           }`}
                         >
+                          {parryStr}
+                        </span>
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-amber-100/70 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700">
                           Bull0:{bullStr}
                         </span>
-                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-emerald-100/70 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700">
-                          Piste:{pStr}
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700">
+                          {pStr}
                         </span>
                         {v.params.initialStumpCell2 && (
                           <span className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-sky-100/70 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-700">
-                            StumpC2:Oui
+                            StumpC2
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 text-right font-bold text-slate-900 dark:text-slate-100">
-                      {v.criteria.overallDesignScore} / 100
+                    <td className="py-2.5 px-2 text-right font-bold text-slate-900 dark:text-slate-100">
+                      {v.criteria.overallDesignScore}/100
                     </td>
-                    <td className="py-2.5 px-3 text-right text-slate-500 dark:text-slate-400">
-                      {(ic.survBlind * 100).toFixed(1)} %
+                    <td className="py-2.5 px-2 text-right text-slate-500">
+                      {(ic.survBlind * 100).toFixed(1)}%
                     </td>
-                    <td className="py-2.5 px-3 text-right text-sky-700 dark:text-sky-400">
-                      {(ic.survSolo * 100).toFixed(1)} %
+                    <td className="py-2.5 px-2 text-right text-slate-600 dark:text-slate-300">
+                      {((ic.survProbOnly ?? ic.survBlind) * 100).toFixed(1)}%
                     </td>
-                    <td className="py-2.5 px-3 text-right font-bold text-emerald-700 dark:text-emerald-400">
-                      {(ic.survCoord * 100).toFixed(1)} %
+                    <td className="py-2.5 px-2 text-right text-sky-700 dark:text-sky-400">
+                      {(ic.survSolo * 100).toFixed(1)}%
                     </td>
-                    <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300">
-                      {(ic.survOmni * 100).toFixed(1)} %
+                    <td className="py-2.5 px-2 text-right text-indigo-700 dark:text-indigo-400">
+                      {((ic.survCoordNoDice ?? ic.survSolo) * 100).toFixed(1)}%
                     </td>
-                    <td className="py-2.5 px-3 text-right font-semibold text-sky-700 dark:text-sky-400">
-                      {ic.privateInfoGainPct >= 0 ? '+' : ''}
-                      {(ic.privateInfoGainPct * 100).toFixed(1)} pts{' '}
-                      <span className="text-[10px] font-normal text-slate-400">
-                        ({ic.privateInfoGainTrees >= 0 ? '+' : ''}
-                        {ic.privateInfoGainTrees.toFixed(1)} a.)
-                      </span>
+                    <td className="py-2.5 px-2 text-right text-teal-700 dark:text-teal-400">
+                      {((ic.survCoordOneShot ?? ic.survCoord) * 100).toFixed(1)}%
                     </td>
-                    <td className="py-2.5 px-3 text-right font-semibold text-emerald-700 dark:text-emerald-400">
-                      {ic.coordinationGainPct >= 0 ? '+' : ''}
-                      {(ic.coordinationGainPct * 100).toFixed(1)} pts{' '}
-                      <span className="text-[10px] font-normal text-slate-400">
-                        ({ic.coordinationGainTrees >= 0 ? '+' : ''}
-                        {ic.coordinationGainTrees.toFixed(1)} a.)
-                      </span>
+                    <td className="py-2.5 px-2 text-right font-bold text-emerald-700 dark:text-emerald-400">
+                      {(ic.survCoord * 100).toFixed(1)}%
                     </td>
-                    <td className="py-2.5 px-3 text-right text-amber-700 dark:text-amber-400">
-                      {ic.fogOfWarCostPct >= 0 ? '+' : ''}
-                      {(ic.fogOfWarCostPct * 100).toFixed(1)} pts
+                    <td className="py-2.5 px-2 text-right text-slate-600 dark:text-slate-300">
+                      {(ic.survOmni * 100).toFixed(1)}%
                     </td>
-                    <td className="py-2.5 px-3 text-right text-slate-800 dark:text-slate-200">
-                      {mainTable.meanTreesLostTotal.toFixed(2)} ± {mainTable.stdDevTreesLostTotal.toFixed(2)}
+                    <td className="py-2.5 px-2 text-right font-semibold text-slate-700 dark:text-slate-300">
+                      {(ic.probabilisticReadingGainPct ?? 0) >= 0 ? '+' : ''}
+                      {((ic.probabilisticReadingGainPct ?? 0) * 100).toFixed(1)}
                     </td>
-                    <td className="py-2.5 px-3 text-right text-amber-700 dark:text-amber-400">
-                      {ic.meanOrphanStealthCoord.toFixed(2)}
+                    <td className="py-2.5 px-2 text-right font-semibold text-sky-700 dark:text-sky-400">
+                      {(ic.privateInfoTeamGainPct ?? 0) >= 0 ? '+' : ''}
+                      {((ic.privateInfoTeamGainPct ?? 0) * 100).toFixed(1)}
                     </td>
-                    <td className="py-2.5 px-3 text-right text-slate-500">
-                      {ic.meanTacticalOverkillCoord.toFixed(2)}{' '}
-                      <span className="text-[10px] text-slate-400">
-                        (Solo:{ic.meanTacticalOverkillSolo.toFixed(1)})
-                      </span>
+                    <td className="py-2.5 px-2 text-right font-semibold text-teal-700 dark:text-teal-400">
+                      {(ic.coordinationOneShotGainPct ?? 0) >= 0 ? '+' : ''}
+                      {((ic.coordinationOneShotGainPct ?? 0) * 100).toFixed(1)}
                     </td>
-                    <td className="py-2.5 px-3 text-right">
+                    <td className="py-2.5 px-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
+                      {(ic.step2RevisionLoopGainPct ?? 0) >= 0 ? '+' : ''}
+                      {((ic.step2RevisionLoopGainPct ?? 0) * 100).toFixed(1)}
+                    </td>
+                    <td className="py-2.5 px-2 text-right font-mono text-[11px]">
                       <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
-                        {mainTable.meanParryAndHS.toFixed(1)}
+                        {(mainTable.meanStep2Revisions ?? 0).toFixed(1)}r
                       </span>{' '}
                       /{' '}
-                      <span className="text-rose-700 dark:text-rose-400">
-                        {mainTable.meanExplosions.toFixed(1)}
+                      <span className="text-sky-700 dark:text-sky-400">
+                        r={(mainTable.choiceToSurvivalCorrelation ?? 0).toFixed(2)}
                       </span>
                     </td>
                   </tr>
@@ -381,22 +380,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="font-mono font-semibold">
                     [{selectedVariant.params.tacticsTrackSetup.join(', ')}]
                   </span>{' '}
-                  · Horizon de référence :{' '}
+                  · Synergie Mise HS :{' '}
+                  <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+                    {selectedVariant.params.parryHsRule ?? 'SYNERGY_TRAP_SAB'}
+                  </span>{' '}
+                  · Horizon :{' '}
                   <span className="font-mono font-semibold">
                     N×X×a = {selectedVariant.params.numPlayers * selectedVariant.params.numTurns * selectedVariant.params.initialTreesPerCell} arbres
                   </span>
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400 mr-1">
                   Profil d'IA observé :
                 </span>
                 {selectedVariant.tableSummaries.map((ts) => (
                   <button
                     key={ts.tableConfigId}
                     onClick={() => setSelectedTableId(ts.tableConfigId)}
-                    className={`px-3 py-1.5 text-xs font-medium rounded border transition-colors cursor-pointer ${
+                    className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors cursor-pointer ${
                       activeTableSummary.tableConfigId === ts.tableConfigId
                         ? 'bg-emerald-700 text-white border-emerald-700'
                         : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-100'
@@ -408,60 +411,118 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             </div>
 
-            {/* BANDEAU CONNAISSANCE PRIVÉE & COORDINATION (4 Profils Gradués) */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4 tabular-nums">
-              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">1. Bot Aveugle (Sans tirage)</div>
-                <div className="text-base font-bold font-mono text-slate-700 dark:text-slate-300 mt-0.5">
-                  {(selectedVariant.criteria.infoAndCoordMetrics.survBlind * 100).toFixed(1)} %
+            {/* BANDEAU 1 : LES 7 PROFILS GRADUÉS ORTHOGONAUX (DÉCOMPOSITION SHAPLEY) */}
+            <div className="mt-4">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                Échelle des 7 Profils de Bots Orthogonaux (Sources d'Information I1, I2, I3)
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 tabular-nums">
+                <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                  <div className="text-[11px] text-slate-500">1. Aveugle (0 info)</div>
+                  <div className="text-sm font-bold font-mono text-slate-700 dark:text-slate-300 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.survBlind * 100).toFixed(1)} %
+                  </div>
+                </div>
+                <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                  <div className="text-[11px] text-slate-600 dark:text-slate-400">2. Probabiliste (I2)</div>
+                  <div className="text-sm font-bold font-mono text-slate-800 dark:text-slate-200 mt-0.5">
+                    {((selectedVariant.criteria.infoAndCoordMetrics.survProbOnly ?? 0) * 100).toFixed(1)} %
+                  </div>
+                </div>
+                <div className="p-2.5 rounded bg-sky-50/60 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
+                  <div className="text-[11px] text-sky-800 dark:text-sky-300">3. Solo (I1+I2)</div>
+                  <div className="text-sm font-bold font-mono text-sky-700 dark:text-sky-400 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.survSolo * 100).toFixed(1)} %
+                  </div>
+                </div>
+                <div className="p-2.5 rounded bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800">
+                  <div className="text-[11px] text-indigo-800 dark:text-indigo-300">4. Coord Sans Dé (I2+I3)</div>
+                  <div className="text-sm font-bold font-mono text-indigo-700 dark:text-indigo-400 mt-0.5">
+                    {((selectedVariant.criteria.infoAndCoordMetrics.survCoordNoDice ?? 0) * 100).toFixed(1)} %
+                  </div>
+                </div>
+                <div className="p-2.5 rounded bg-teal-50/60 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800">
+                  <div className="text-[11px] text-teal-800 dark:text-teal-300">5. Coord 1-Passe</div>
+                  <div className="text-sm font-bold font-mono text-teal-700 dark:text-teal-400 mt-0.5">
+                    {((selectedVariant.criteria.infoAndCoordMetrics.survCoordOneShot ?? 0) * 100).toFixed(1)} %
+                  </div>
+                </div>
+                <div className="p-2.5 rounded bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700">
+                  <div className="text-[11px] font-semibold text-emerald-900 dark:text-emerald-300">
+                    6. Coord Révisable (Réf)
+                  </div>
+                  <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.survCoord * 100).toFixed(1)} %
+                  </div>
+                </div>
+                <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                  <div className="text-[11px] text-slate-500">7. Omniscient (Plafond)</div>
+                  <div className="text-sm font-bold font-mono text-slate-800 dark:text-slate-200 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.survOmni * 100).toFixed(1)} %
+                  </div>
                 </div>
               </div>
-              <div className="p-3 rounded bg-sky-50/60 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
-                <div className="text-[11px] text-sky-800 dark:text-sky-300">
-                  2. Bot Informé Solo (+Info Privée)
-                </div>
-                <div className="text-base font-bold font-mono text-sky-700 dark:text-sky-400 mt-0.5">
-                  {(selectedVariant.criteria.infoAndCoordMetrics.survSolo * 100).toFixed(1)} %{' '}
-                  <span className="text-xs font-normal">
-                    ({selectedVariant.criteria.infoAndCoordMetrics.privateInfoGainPct >= 0 ? '+' : ''}
-                    {(selectedVariant.criteria.infoAndCoordMetrics.privateInfoGainPct * 100).toFixed(1)} pts)
-                  </span>
-                </div>
+            </div>
+
+            {/* BANDEAU 2 : LES 5 GAINS DÉCISIONNELS & MÉTRIQUES DE BOUCLE 2.2 */}
+            <div className="mt-4">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                Les 5 Gains Décisionnels (I1, I2, I3) & Boucle Systémique de Révision 2.2
               </div>
-              <div className="p-3 rounded bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                <div className="text-[11px] text-emerald-800 dark:text-emerald-300">
-                  3. Bot Coordonné (+Coordination)
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 tabular-nums">
+                <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <div className="text-[11px] text-slate-500">1. Gain Lecture Prob (I2)</div>
+                  <div className="text-sm font-bold font-mono text-slate-800 dark:text-slate-200 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.probabilisticReadingGainPct ?? 0) >= 0 ? '+' : ''}
+                    {((selectedVariant.criteria.infoAndCoordMetrics.probabilisticReadingGainPct ?? 0) * 100).toFixed(1)} pts
+                  </div>
+                  <div className="text-[10px] text-slate-400">Prob − Aveugle</div>
                 </div>
-                <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
-                  {(selectedVariant.criteria.infoAndCoordMetrics.survCoord * 100).toFixed(1)} %{' '}
-                  <span className="text-xs font-normal">
-                    ({selectedVariant.criteria.infoAndCoordMetrics.coordinationGainPct >= 0 ? '+' : ''}
-                    {(selectedVariant.criteria.infoAndCoordMetrics.coordinationGainPct * 100).toFixed(1)} pts)
-                  </span>
+
+                <div className="p-2.5 rounded bg-sky-50/50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-800">
+                  <div className="text-[11px] text-sky-800 dark:text-sky-300">2. Gain Dé Privé Solo (I1)</div>
+                  <div className="text-sm font-bold font-mono text-sky-700 dark:text-sky-400 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.privateInfoSoloGainPct ?? 0) >= 0 ? '+' : ''}
+                    {((selectedVariant.criteria.infoAndCoordMetrics.privateInfoSoloGainPct ?? 0) * 100).toFixed(1)} pts
+                  </div>
+                  <div className="text-[10px] text-slate-400">Solo − Prob</div>
                 </div>
-              </div>
-              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">4. Bot Omniscient (Plafond)</div>
-                <div className="text-base font-bold font-mono text-slate-800 dark:text-slate-200 mt-0.5">
-                  {(selectedVariant.criteria.infoAndCoordMetrics.survOmni * 100).toFixed(1)} %{' '}
-                  <span className="text-xs font-normal text-amber-600">
-                    (Brouillard: {(selectedVariant.criteria.infoAndCoordMetrics.fogOfWarCostPct * 100).toFixed(1)} pts)
-                  </span>
+
+                <div className="p-2.5 rounded bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800">
+                  <div className="text-[11px] text-indigo-800 dark:text-indigo-300">3. Vrai Gain I1 en Équipe</div>
+                  <div className="text-sm font-bold font-mono text-indigo-700 dark:text-indigo-400 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.privateInfoTeamGainPct ?? 0) >= 0 ? '+' : ''}
+                    {((selectedVariant.criteria.infoAndCoordMetrics.privateInfoTeamGainPct ?? 0) * 100).toFixed(1)} pts
+                  </div>
+                  <div className="text-[10px] text-slate-400">CoordRév − CoordSansDé</div>
                 </div>
-              </div>
-              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Furtivité Orpheline (Coord)</div>
-                <div className="text-base font-bold font-mono text-amber-700 dark:text-amber-400 mt-0.5">
-                  {selectedVariant.criteria.infoAndCoordMetrics.meanOrphanStealthCoord.toFixed(2)} jetons/p.
+
+                <div className="p-2.5 rounded bg-teal-50/50 dark:bg-teal-950/20 border border-teal-200 dark:border-teal-800">
+                  <div className="text-[11px] text-teal-800 dark:text-teal-300">4. Gain Coord 1-Passe (2.1)</div>
+                  <div className="text-sm font-bold font-mono text-teal-700 dark:text-teal-400 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.coordinationOneShotGainPct ?? 0) >= 0 ? '+' : ''}
+                    {((selectedVariant.criteria.infoAndCoordMetrics.coordinationOneShotGainPct ?? 0) * 100).toFixed(1)} pts
+                  </div>
+                  <div className="text-[10px] text-slate-400">Coord1P − Solo</div>
                 </div>
-              </div>
-              <div className="p-3 rounded bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
-                <div className="text-[11px] text-slate-500">Overkill Tactique (Coord vs Solo)</div>
-                <div className="text-base font-bold font-mono text-slate-700 dark:text-slate-300 mt-0.5">
-                  {selectedVariant.criteria.infoAndCoordMetrics.meanTacticalOverkillCoord.toFixed(2)}{' '}
-                  <span className="text-xs font-normal text-slate-400">
-                    vs {selectedVariant.criteria.infoAndCoordMetrics.meanTacticalOverkillSolo.toFixed(2)}
-                  </span>
+
+                <div className="p-2.5 rounded bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                  <div className="text-[11px] text-emerald-800 dark:text-emerald-300">5. Gain Boucle Révision 2.2</div>
+                  <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
+                    {(selectedVariant.criteria.infoAndCoordMetrics.step2RevisionLoopGainPct ?? 0) >= 0 ? '+' : ''}
+                    {((selectedVariant.criteria.infoAndCoordMetrics.step2RevisionLoopGainPct ?? 0) * 100).toFixed(1)} pts
+                  </div>
+                  <div className="text-[10px] text-slate-400">CoordRév − Coord1P</div>
+                </div>
+
+                <div className="p-2.5 rounded bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <div className="text-[11px] text-slate-500">Révisions 2.2 / Corrélation r</div>
+                  <div className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
+                    {(activeTableSummary.meanStep2Revisions ?? 0).toFixed(1)} rév. · r={(activeTableSummary.choiceToSurvivalCorrelation ?? 0).toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Signaux complétés : {(activeTableSummary.meanSuccessfulSignalCompletions ?? 0).toFixed(1)}/p.
+                  </div>
                 </div>
               </div>
             </div>
@@ -471,7 +532,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="p-3.5 rounded-md bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    1. Valeur de la Connaissance Privée
+                    1. Richesse Informationnelle (I1 + I2)
                   </span>
                   <span className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
                     {selectedVariant.criteria.privateInfoValue.score}/100
@@ -485,7 +546,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="p-3.5 rounded-md bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    2. Tension & Cible [70% – 82%]
+                    2. Tension & Fenêtre [45% – 82%]
                   </span>
                   <span className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
                     {selectedVariant.criteria.tensionAndAttrition.score}/100
@@ -499,7 +560,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="p-3.5 rounded-md bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    3. Efficacité Seuils S & Furtivité
+                    3. Coordination & Boucle Révisable 2.2
                   </span>
                   <span className="text-sm font-bold font-mono text-emerald-700 dark:text-emerald-400">
                     {selectedVariant.criteria.coordinationEfficiency.score}/100
@@ -645,10 +706,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          {/* C. Fréquence moyenne des événements de Combat, Furtivité & Leviers v3.2 */}
+          {/* C. Fréquence moyenne des événements de Combat, Furtivité & Leviers v3.3 */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
             <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-              C. Fréquence Moyenne par Partie des Événements de Combat, Furtivité & Leviers v3.2
+              C. Fréquence Moyenne par Partie des Événements de Combat, Furtivité & Boucle 2.2 (v3.3)
             </h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
               Mesures moyennes par partie sur {activeTableSummary.gamesCount} simulations ({activeTableSummary.tableConfigName}).
@@ -711,7 +772,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Mises HS Défensives (S ≥ 3+k+shift)
+                  Mises HS ({selectedVariant.params.parryHsRule === 'STANDARD_S3' ? 'Standard S≥3' : 'Synergie Piège/Sab'})
                 </div>
                 <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
                   {activeTableSummary.meanParryAndHS.toFixed(2)}
@@ -759,22 +820,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Réparations Totales (dont ActRep 3.1)
+                  Révisions 2.2 / Signaux Complétés
                 </div>
-                <div className="text-base font-bold font-mono text-slate-900 dark:text-slate-100 mt-0.5">
-                  {activeTableSummary.meanRepairs.toFixed(2)}{' '}
-                  <span className="text-xs font-normal text-emerald-700 dark:text-emerald-400">
-                    ({(activeTableSummary.meanActiveRepairsStep31 ?? 0).toFixed(2)} en 3.1)
+                <div className="text-base font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
+                  {(activeTableSummary.meanStep2Revisions ?? 0).toFixed(2)}{' '}
+                  <span className="text-xs font-normal text-sky-700 dark:text-sky-400">
+                    ({(activeTableSummary.meanSuccessfulSignalCompletions ?? 0).toFixed(2)} sig.)
                   </span>
                 </div>
               </div>
 
               <div className="p-3 rounded border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Sabotages Purgés par Réparation
+                  Pertinence Poses & Corrélation r
                 </div>
                 <div className="text-base font-bold font-mono text-sky-700 dark:text-sky-400 mt-0.5">
-                  {(activeTableSummary.meanSabotageClearedByRepair ?? 0).toFixed(2)}
+                  {((activeTableSummary.meanPlacementRelevanceScore ?? 0) * 100).toFixed(1)}%{' '}
+                  <span className="text-xs font-normal text-emerald-700 dark:text-emerald-400">
+                    (r={(activeTableSummary.choiceToSurvivalCorrelation ?? 0).toFixed(2)})
+                  </span>
                 </div>
               </div>
             </div>

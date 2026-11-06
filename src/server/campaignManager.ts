@@ -8,6 +8,7 @@ import {
   CampaignConfig,
   CampaignRecord,
   CombatThresholdShift,
+  ParryHsRule,
   SimulationConfig,
   SingleGameResult,
   TableConfig,
@@ -338,14 +339,14 @@ export class CampaignManager {
         const raw = fs.readFileSync(fullPath, 'utf-8');
         const record = JSON.parse(raw) as CampaignRecord;
 
-        // Vérifie la compatibilité avec le modèle v3.2 (présence de infoAndCoordMetrics et des nouveaux leviers)
+        // Vérifie la compatibilité avec le modèle v3.3 (présence des 7 bots et de survProbOnly)
         const isCompatible =
           record.config?.type === 'ORACLE_STRESS_TEST'
-            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.COORD_HYBRID) &&
-              Boolean(record.config?.sweep?.tacticalDefenderCapValues)
+            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.PROB_ONLY) &&
+              Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.COORD_NO_DICE)
             : (record.variantResults.length === 0 &&
-                Boolean(record.config?.sweep?.tacticalDefenderCapValues)) ||
-              Boolean(record.variantResults[0]?.criteria?.infoAndCoordMetrics);
+                Boolean(record.config?.sweep?.parryHsRuleValues)) ||
+              record.variantResults[0]?.criteria?.infoAndCoordMetrics?.survProbOnly !== undefined;
 
         if (!isCompatible) {
           fs.unlinkSync(fullPath);
@@ -493,7 +494,10 @@ export class CampaignManager {
               totalTrapsAndSabotagesObserved: 0,
               scoreDistributionByBotLevel: {
                 BLIND: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                PROB_ONLY: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
                 SOLO_INFORMED: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                COORD_NO_DICE: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
+                COORD_ONE_SHOT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
                 COORD_HYBRID: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
                 OMNISCIENT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
               },
@@ -682,9 +686,12 @@ export class CampaignManager {
       (record.config.baseSeed || 77777) + record.progress.completedGames
     );
     const botLevels: BotProfileId[] = [
-      'COORD_HYBRID',
-      'SOLO_INFORMED',
       'BLIND',
+      'PROB_ONLY',
+      'SOLO_INFORMED',
+      'COORD_NO_DICE',
+      'COORD_ONE_SHOT',
+      'COORD_HYBRID',
       'OMNISCIENT',
     ];
 
@@ -694,7 +701,10 @@ export class CampaignManager {
       { sumSurv: number; sumLost: number; sumExp: number; defeats: number; miracles: number }
     > = {
       BLIND: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      PROB_ONLY: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
       SOLO_INFORMED: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      COORD_NO_DICE: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
+      COORD_ONE_SHOT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
       COORD_HYBRID: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
       OMNISCIENT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
     };
@@ -717,8 +727,9 @@ export class CampaignManager {
 
     const caps: TacticalDefenderCap[] = [99, 2, 1];
     const shifts: CombatThresholdShift[] = [0, 1];
-    const bullActions: BulldozerZeroStumpAction[] = ['NONE', 'DESTROY_TREE'];
-    const presets: TacticsTrackPreset[] = ['ASSAULT_HIGH', 'ASSAULT_LOW'];
+    const parryRules: ParryHsRule[] = ['SYNERGY_TRAP_SAB', 'STANDARD_S3'];
+    const bullActions: BulldozerZeroStumpAction[] = ['DESTROY_TREE', 'NONE'];
+    const presets: TacticsTrackPreset[] = ['ASSAULT_LOW', 'ASSAULT_HIGH'];
 
     while (!ctrl.stopped) {
       if (ctrl.paused) {
@@ -754,8 +765,9 @@ export class CampaignManager {
               shuffleTacticsTrack: paramRng.nextFloat() < 0.25,
               tacticalDefenderCap: caps[paramRng.nextInt(0, caps.length - 1)],
               combatThresholdShift: shifts[paramRng.nextInt(0, shifts.length - 1)],
+              parryHsRule: parryRules[paramRng.nextInt(0, parryRules.length - 1)],
               bulldozerZeroStumpAction: bullActions[paramRng.nextInt(0, bullActions.length - 1)],
-              initialStumpCell2: paramRng.nextFloat() < 0.5,
+              initialStumpCell2: paramRng.nextFloat() < 0.75,
             };
           } else {
             params = variants[gameIdx % variants.length].params;
@@ -865,26 +877,27 @@ export class CampaignManager {
   }
 
   /**
-   * Génère au premier lancement une campagne de référence v3.2 comparant
-   * les nouveaux leviers de difficulté (Cap, Shift, Bull0, Piste) et mesurant
-   * le Gain d'Info Privée et le Gain de Coordination sur les 4 profils gradués.
+   * Génère au premier lancement une campagne de référence v3.3 comparant
+   * les leviers fins (Cap, Shift, Synergie Mise HS) sur les invariants figés v3.2
+   * et mesurant les 5 Gains Décisionnels sur les 7 profils gradués orthogonaux.
    */
   private createInitialReferenceCampaign(): void {
     const config: CampaignConfig = {
-      id: 'camp_ref_v32_info_coord',
-      name: 'Campagne de Référence v3.2 — Leviers de Difficulté & Analyse Connaissance Privée / Coordination',
+      id: 'camp_ref_v33_shapley_7bots',
+      name: 'Campagne de Référence v3.3 — Invariants v3.2 Figés, Synergie Mise HS & Décomposition Shapley (7 Bots)',
       type: 'FIVE_LEVERS_ABLATION',
       createdAt: new Date().toISOString(),
-      gamesPerVariantAndTable: 80,
+      gamesPerVariantAndTable: 50,
       sweep: {
         numPlayersValues: [4],
         numTurnsValues: [8],
         initialTreesPerCellValues: [2],
-        tacticalDefenderCapValues: [99, 2, 1],
+        tacticalDefenderCapValues: [2, 1],
         combatThresholdShiftValues: [0, 1],
-        bulldozerZeroStumpActionValues: ['NONE', 'DESTROY_TREE'],
-        initialStumpCell2Values: [false],
-        tacticsTrackPresetValues: ['ASSAULT_HIGH', 'ASSAULT_LOW'],
+        parryHsRuleValues: ['SYNERGY_TRAP_SAB', 'STANDARD_S3'],
+        bulldozerZeroStumpActionValues: ['DESTROY_TREE'],
+        initialStumpCell2Values: [true],
+        tacticsTrackPresetValues: ['ASSAULT_LOW'],
         shuffleTacticsTrackValues: [false],
       },
       selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
@@ -956,7 +969,7 @@ export class CampaignManager {
         totalVariants: variants.length,
         elapsedSeconds: elapsedSec,
         gamesPerSecond: completedGames / elapsedSec,
-        currentPhaseLabel: `Campagne de référence v3.2 prête (${variants.length} variantes × 4 profils gradués)`,
+        currentPhaseLabel: `Campagne de référence v3.3 prête (${variants.length} variantes × 7 profils gradués)`,
       },
       variantResults,
     };
