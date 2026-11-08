@@ -1,3 +1,4 @@
+import { internalAuthorization } from "./src/server/internalAuthorization";
 import { apiSecurity, type Authorize } from "./src/server/apiSecurity";
 import { singleInput } from "./src/server/singleValidation";
 import type { ProtocolConfig } from "./src/scientific/protocol";
@@ -279,7 +280,7 @@ export async function createApp(
 }
 
 async function startServer() {
-  const { app } = await createApp();
+  const { app } = await createApp({authorize: internalAuthorization()});
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, "127.0.0.1", () =>
     console.log(`Serveur actif sur le port ${port}`),

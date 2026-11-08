@@ -160,12 +160,14 @@ export function controlCampaign(
 ) {
   return backendJson<CampaignRecord>(
     `api/campaigns/${encodeURIComponent(id)}/${action}`,
-    { method: "POST" },
+    { method: "POST", headers: {"Content-Type":"application/json"}, body: "{}" },
   );
 }
 export async function removeCampaign(id: string) {
   await backendJson(`api/campaigns/${encodeURIComponent(id)}`, {
     method: "DELETE",
+    headers: {"Content-Type":"application/json"},
+    body: "{}",
   });
 }
 export function simulateSingleGameTrace(payload: {
