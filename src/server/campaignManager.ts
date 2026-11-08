@@ -1,3 +1,5 @@
+import {validateCampaignConfig} from './campaignValidation';
+import {CampaignStore} from './campaignStore';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -305,12 +307,13 @@ export class CampaignManager {
     string,
     { paused: boolean; stopped: boolean; lastSavedAt: number }
   > = new Map();
-  private savingInFlight: Set<string> = new Set();
+  private store: CampaignStore;
 
-  constructor() {
-    ensureDataDirs();
+  constructor(options: {campaignsDir?: string; createReference?: boolean} = {}) {
+    const campaignsDir = options.campaignsDir ?? CAMPAIGNS_DIR;
+    this.store = new CampaignStore(campaignsDir);
     this.loadCampaignsFromDisk();
-    if (this.campaigns.size === 0) {
+    if (options.createReference !== false && this.campaigns.size === 0 && !fs.readdirSync(campaignsDir).some(f => f.endsWith('.json'))) {
       this.createInitialReferenceCampaign();
     }
   }
@@ -332,52 +335,19 @@ export class CampaignManager {
   }
 
   private loadCampaignsFromDisk(): void {
-    try {
-      const files = fs.readdirSync(CAMPAIGNS_DIR).filter((f) => f.endsWith('.json'));
-      for (const file of files) {
-        const fullPath = path.join(CAMPAIGNS_DIR, file);
-        const raw = fs.readFileSync(fullPath, 'utf-8');
-        const record = JSON.parse(raw) as CampaignRecord;
-
-        // Vérifie la compatibilité avec le modèle v3.3 (présence des 7 bots et de survProbOnly)
-        const isCompatible =
-          record.config?.type === 'ORACLE_STRESS_TEST'
-            ? Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.PROB_ONLY) &&
-              Boolean(record.stressTelemetry?.scoreDistributionByBotLevel?.COORD_NO_DICE)
-            : (record.variantResults.length === 0 &&
-                Boolean(record.config?.sweep?.parryHsRuleValues)) ||
-              record.variantResults[0]?.criteria?.infoAndCoordMetrics?.survProbOnly !== undefined;
-
-        if (!isCompatible) {
-          fs.unlinkSync(fullPath);
-          continue;
-        }
-
-        if (record.status === 'RUNNING') {
-          record.status = 'PAUSED';
-          record.progress.currentPhaseLabel =
-            'Interrompu par redémarrage serveur (Prêt à reprendre)';
-        }
-        this.campaigns.set(record.id, record);
+    for (const record of this.store.load()) {
+      if (record.status === 'RUNNING') {
+        record.status = 'PAUSED';
+        record.progress.currentPhaseLabel = 'Interrompu par redémarrage serveur';
       }
-    } catch (err) {
-      console.error('Erreur chargement des campagnes depuis le disque :', err);
+      this.campaigns.set(record.id, record);
     }
   }
 
   public async saveToDiskAsync(record: CampaignRecord): Promise<void> {
-    if (this.savingInFlight.has(record.id)) return;
-    this.savingInFlight.add(record.id);
-    try {
-      ensureDataDirs();
-      const filePath = path.join(CAMPAIGNS_DIR, `${record.id}.json`);
-      const payload = JSON.stringify(record, null, 2);
-      await fs.promises.writeFile(filePath, payload, 'utf-8');
-    } catch (err) {
-      console.error(`Erreur sauvegarde asynchrone campagne ${record.id} :`, err);
-    } finally {
-      this.savingInFlight.delete(record.id);
-    }
+    if (this.campaigns.get(record.id) !== record) return;
+    try { await this.store.save(record); }
+    catch (err) { console.error('Échec sauvegarde campagne', record.id, err); }
   }
 
   public listCampaigns(): CampaignRecord[] {
@@ -397,10 +367,7 @@ export class CampaignManager {
       this.activeControl.delete(id);
     }
     this.campaigns.delete(id);
-    const filePath = path.join(CAMPAIGNS_DIR, `${id}.json`);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    void this.store.remove(id).catch(err => console.error('Échec suppression campagne', err));
     return true;
   }
 
@@ -450,6 +417,8 @@ export class CampaignManager {
   }
 
   public startCampaign(config: CampaignConfig): CampaignRecord {
+    validateCampaignConfig(config);
+    if (this.campaigns.has(config.id)) throw new Error('Identifiant déjà utilisé');
     const now = new Date().toISOString();
     const variants = expandParameterSweep(config.sweep);
     const totalVariants = variants.length;

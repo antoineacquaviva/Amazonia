@@ -1,3 +1,4 @@
+import {validateCampaignId} from './src/server/campaignStore';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -24,6 +25,11 @@ async function startServer() {
 
   const campaignManager = new CampaignManager();
   const apiRouter = express.Router();
+
+  apiRouter.param('id', (req, res, next, id) => {
+    try { validateCampaignId(id); next(); }
+    catch { res.status(400).json({error: 'Identifiant de campagne invalide'}); }
+  });
 
   // Santé & Informations d'environnement (Serveur VM Oracle multi-cœurs)
   apiRouter.get('/health', (_req, res) => {
