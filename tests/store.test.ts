@@ -17,7 +17,8 @@ import {CampaignManager} from '../src/server/campaignManager';
 test('manager loads valid records without moving rejected originals or bootstrapping over them',()=>temporary(async dir=>{
  fs.writeFileSync(path.join(dir,'camp_ref_v33_shapley_7bots.json'),'{}');
  const empty=new CampaignManager({campaignsDir:dir});assert.equal(empty.listCampaigns().length,0);assert.equal(fs.readFileSync(path.join(dir,'camp_ref_v33_shapley_7bots.json'),'utf8'),'{}');
- await new CampaignStore(dir).save(record());const manager=new CampaignManager({campaignsDir:dir,createReference:false});assert.equal(manager.listCampaigns().length,1);
+ await empty.close();
+ await new CampaignStore(dir).save(record());const manager=new CampaignManager({campaignsDir:dir,createReference:false});assert.equal(manager.listCampaigns().length,1);await manager.close();
 }));
 test('failed atomic replacement preserves previous JSON and later saves can succeed',()=>temporary(async dir=>{
  const store=new CampaignStore(dir),r=record();await store.save(r);const original=fs.readFileSync(path.join(dir,'valid.json'),'utf8');const rename=fs.promises.rename;

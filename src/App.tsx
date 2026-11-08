@@ -1,3 +1,4 @@
+import type {ManagedRecord} from './server/campaignManager';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   CampaignConfig,
@@ -53,10 +54,9 @@ export default function App() {
 
   const loadCampaigns = useCallback(async () => {
     try {
-      const [health, list] = await Promise.all([
-        fetchServerHealth(false),
-        fetchCampaigns(),
-      ]);
+      const health = await fetchServerHealth(false);
+      if(!health) throw new Error('Serveur indisponible. Les campagnes restent sur le serveur ; aucun calcul local ne sera lancé.');
+      const list = await fetchCampaigns();
       setServerHealth(health);
       setFallbackActive(isUsingBrowserFallback());
       setBackendDiag(getLastBackendDiagnostic());
@@ -369,6 +369,32 @@ export default function App() {
 
       {/* Contenu Principal (Largeur 1440px max centrée) */}
       <main className="flex-1 w-full max-w-[1440px] mx-auto px-6 py-8">
+        {(selectedCampaign as ManagedRecord | null)?.orchestration &&
+          (() => {
+            const o = (selectedCampaign as ManagedRecord).orchestration!;
+            return (
+              <aside
+                className="p-3 border rounded mb-4"
+                aria-label="Checkpoint serveur"
+              >
+                <p>
+                  Campagne serveur : {o.reason} ·{" "}
+                  {selectedCampaign!.progress.completedGames} parties
+                  enregistrées durablement
+                </p>
+                <p>
+                  Lots : {o.validatedBatches} validés · {o.pendingBatches} en
+                  attente · {o.runningBatches} attribués · {o.failedBatches}{" "}
+                  échoués · {o.retries} nouvelles tentatives
+                </p>
+                <p>Dernier checkpoint : {o.lastCheckpoint}</p>
+                {selectedCampaign!.status === 'ERROR' && <button className="px-3 py-1 border rounded" onClick={() => handleControlCampaign(selectedCampaign!.id, 'resume')}>Réessayer depuis le dernier checkpoint</button>}
+                {o.lastError && (
+                  <p role="alert">Dernière erreur : {o.lastError}</p>
+                )}
+              </aside>
+            );
+          })()}
         {activeTab === 'dashboard' && (
           <DashboardView
             campaigns={campaigns}

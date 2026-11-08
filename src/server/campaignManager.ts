@@ -1,269 +1,39 @@
-import {validateCampaignConfig} from './campaignValidation';
-import {CampaignStore} from './campaignStore';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { Worker } from 'node:worker_threads';
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { CampaignStore, validateCampaignId } from "./campaignStore";
+import { validateCampaignConfig } from "./campaignValidation";
+import { DurableStore } from "./durableStore";
+import { WorkerPool, type PoolOptions } from "./workerPool";
+import { tablesFor, stressParams, BOTS } from "./campaignPlan";
 import {
-  BotProfileId,
-  BulldozerZeroStumpAction,
-  CampaignConfig,
-  CampaignRecord,
-  CombatThresholdShift,
-  ParryHsRule,
-  SimulationConfig,
-  SingleGameResult,
-  TableConfig,
-  TacticalDefenderCap,
-  TacticsTrackPreset,
-  VariantEvaluationResult,
-} from '../sim/types';
-import {
-  DEFAULT_SWEEP_INPUT,
-  DEFAULT_TABLE_CONFIGS,
-  TACTICS_TRACK_PRESETS,
-} from '../sim/i18n';
-import { runSingleGame } from '../sim/engine';
-import {
-  evaluateFourCriteria,
   expandParameterSweep,
   summarizeTableGames,
-} from '../sim/evaluator';
-import { SeededRNG } from '../sim/rng';
-import {
-  EvalBatchWorkerRequest,
-  EvalBatchWorkerResponse,
-  StressBatchWorkerRequest,
-  StressBatchWorkerResponse,
+  evaluateFourCriteria,
+} from "../sim/evaluator";
+import type {
+  CampaignRecord,
+  CampaignConfig,
+  VariantEvaluationResult,
+  SingleGameResult,
+  TableConfigSummary,
+} from "../sim/types";
+import type {
   WorkerRequestMessage,
-  WorkerResponseMessage,
-} from './simWorker';
-
-export const TOTAL_CPU_CORES = Math.max(1, os.cpus()?.length || 1);
-export const WORKER_POOL_SIZE = Math.max(1, TOTAL_CPU_CORES - 1);
-const PERIODIC_SAVE_INTERVAL_MS = 15000; // 15 secondes entre deux sauvegardes disque asynchrones
-
-const DATA_ROOT = path.resolve(process.cwd(), 'data');
-const CAMPAIGNS_DIR = path.join(DATA_ROOT, 'campaigns');
-
-function ensureDataDirs(): void {
-  if (!fs.existsSync(CAMPAIGNS_DIR)) {
-    fs.mkdirSync(CAMPAIGNS_DIR, { recursive: true });
-  }
+  StressBatchWorkerResponse,
+} from "./simWorker";
+export const TOTAL_CPU_CORES = os.availableParallelism();
+function envInt(name: string, fallback: number, max: number) {
+  const n = Number(process.env[name] ?? fallback);
+  if (!Number.isInteger(n) || n < 1 || n > max)
+    throw new Error(`${name} invalide`);
+  return n;
 }
-
-// ============================================================================
-// POOL DE WORKERS MULTI-CŒURS (node:worker_threads + tsx)
-// ============================================================================
-interface QueuedWorkerTask {
-  request: WorkerRequestMessage;
-  resolve: (res: WorkerResponseMessage) => void;
-  reject: (err: Error) => void;
-}
-
-class SimulationWorkerPool {
-  private workers: Worker[] = [];
-  private idleWorkers: Worker[] = [];
-  private activeTasks: Map<Worker, QueuedWorkerTask> = new Map();
-  private queue: QueuedWorkerTask[] = [];
-  private nextTaskId = 1;
-  private initialized = false;
-  private workerFailedPermanently = false;
-
-  private initPool(): void {
-    if (this.initialized || this.workerFailedPermanently) return;
-    this.initialized = true;
-    const workerScript = path.resolve(process.cwd(), 'src/server/simWorker.ts');
-
-    for (let i = 0; i < WORKER_POOL_SIZE; i++) {
-      try {
-        const w = new Worker(workerScript, {
-          execArgv: ['--import', 'tsx'],
-        });
-
-        w.on('message', (msg: WorkerResponseMessage) => {
-          const currentTask = this.activeTasks.get(w);
-          this.activeTasks.delete(w);
-          this.idleWorkers.push(w);
-          if (currentTask) {
-            currentTask.resolve(msg);
-          }
-          this.dispatchNext();
-        });
-
-        w.on('error', (err) => {
-          console.error('[WorkerPool] Erreur worker thread, repli local :', err);
-          const currentTask = this.activeTasks.get(w);
-          this.activeTasks.delete(w);
-          this.workers = this.workers.filter((x) => x !== w);
-          this.idleWorkers = this.idleWorkers.filter((x) => x !== w);
-          if (this.workers.length === 0) {
-            this.workerFailedPermanently = true;
-          }
-          if (currentTask) {
-            this.runFallbackInProcess(currentTask.request)
-              .then(currentTask.resolve)
-              .catch(currentTask.reject);
-          }
-          this.dispatchNext();
-        });
-
-        this.workers.push(w);
-        this.idleWorkers.push(w);
-      } catch (err) {
-        console.error('[WorkerPool] Impossible de créer un worker :', err);
-        this.workerFailedPermanently = true;
-        break;
-      }
-    }
-  }
-
-  private dispatchNext(): void {
-    if (this.workerFailedPermanently) {
-      while (this.queue.length > 0) {
-        const task = this.queue.shift()!;
-        this.runFallbackInProcess(task.request)
-          .then(task.resolve)
-          .catch(task.reject);
-      }
-      return;
-    }
-
-    while (this.idleWorkers.length > 0 && this.queue.length > 0) {
-      const worker = this.idleWorkers.shift()!;
-      const task = this.queue.shift()!;
-      this.activeTasks.set(worker, task);
-      worker.postMessage(task.request);
-    }
-  }
-
-  private async runFallbackInProcess(
-    msg: WorkerRequestMessage
-  ): Promise<WorkerResponseMessage> {
-    if (msg.type === 'RUN_EVAL_BATCH') {
-      const results: SingleGameResult[] = [];
-      for (const job of msg.jobs) {
-        results.push(
-          runSingleGame(
-            msg.params,
-            msg.botProfiles,
-            job.seed,
-            msg.tableId,
-            job.recordTrace
-          )
-        );
-      }
-      return {
-        taskId: msg.taskId,
-        type: 'RUN_EVAL_BATCH_RESULT',
-        results,
-      };
-    } else {
-      const outcomes: StressBatchWorkerResponse['outcomes'] = [];
-      for (const job of msg.jobs) {
-        const res = runSingleGame(
-          job.params,
-          [job.botProfile],
-          job.seed,
-          `stress_${job.botProfile}`,
-          false
-        );
-        let captureCategory: StressBatchWorkerResponse['outcomes'][0]['captureCategory'] =
-          null;
-        let captureSummary = '';
-        if (res.violations.length > 0) {
-          captureCategory = 'INVARIANT_VIOLATION';
-          captureSummary = res.violations[0].message;
-        } else if (res.explosionsCount >= 2) {
-          captureCategory = 'MULTI_EXPLOSION';
-          captureSummary = `${res.explosionsCount} explosions en une partie.`;
-        } else if (res.survivalRateHorizon <= 0.15) {
-          captureCategory = 'HIGH_DAMAGE_WIPEOUT';
-          captureSummary = `Seulement ${(res.survivalRateHorizon * 100).toFixed(1)}% de survie.`;
-        } else if (
-          job.botProfile === 'OMNISCIENT' &&
-          res.victoryBracket === 'DEFEAT'
-        ) {
-          captureCategory = 'OMNISCIENT_DEFEAT';
-          captureSummary = `Défaite du Bot Omniscient.`;
-        }
-        outcomes.push({
-          seed: job.seed,
-          params: job.params,
-          botProfile: job.botProfile,
-          res,
-          captureCategory,
-          captureSummary,
-        });
-      }
-      return {
-        taskId: msg.taskId,
-        type: 'RUN_STRESS_BATCH_RESULT',
-        outcomes,
-      };
-    }
-  }
-
-  public runEvalBatch(
-    payload: Omit<EvalBatchWorkerRequest, 'taskId' | 'type'>
-  ): Promise<EvalBatchWorkerResponse> {
-    this.initPool();
-    const taskId = this.nextTaskId++;
-    const request: EvalBatchWorkerRequest = {
-      taskId,
-      type: 'RUN_EVAL_BATCH',
-      ...payload,
-    };
-    return new Promise<EvalBatchWorkerResponse>((resolve, reject) => {
-      this.queue.push({
-        request,
-        resolve: resolve as (res: WorkerResponseMessage) => void,
-        reject,
-      });
-      this.dispatchNext();
-    });
-  }
-
-  public runStressBatch(
-    payload: Omit<StressBatchWorkerRequest, 'taskId' | 'type'>
-  ): Promise<StressBatchWorkerResponse> {
-    this.initPool();
-    const taskId = this.nextTaskId++;
-    const request: StressBatchWorkerRequest = {
-      taskId,
-      type: 'RUN_STRESS_BATCH',
-      ...payload,
-    };
-    return new Promise<StressBatchWorkerResponse>((resolve, reject) => {
-      this.queue.push({
-        request,
-        resolve: resolve as (res: WorkerResponseMessage) => void,
-        reject,
-      });
-      this.dispatchNext();
-    });
-  }
-
-  public getPoolStats(): {
-    totalWorkers: number;
-    busyWorkers: number;
-    idleWorkers: number;
-    queuedTasks: number;
-    workerFailedPermanently: boolean;
-  } {
-    return {
-      totalWorkers: this.workers.length || WORKER_POOL_SIZE,
-      busyWorkers: this.activeTasks.size,
-      idleWorkers: this.idleWorkers.length,
-      queuedTasks: this.queue.length,
-      workerFailedPermanently: this.workerFailedPermanently,
-    };
-  }
-}
-
-const sharedWorkerPool = new SimulationWorkerPool();
-
-// Mesure temps-réel du % d'utilisation CPU sur tous les cœurs de la VM
+export const WORKER_POOL_SIZE = envInt(
+  "AMAZONIA_WORKERS",
+  Math.max(1, TOTAL_CPU_CORES - 1),
+  Math.max(1, TOTAL_CPU_CORES - 1),
+);
 let lastCpuSnapshot = os.cpus();
 let lastCpuPercent = 0;
 let lastCpuCheckTime = Date.now();
@@ -295,655 +65,712 @@ function measureVmCpuPercent(): number {
   if (totalDiff > 0) {
     lastCpuPercent = Math.max(
       0,
-      Math.min(100, Math.round(((totalDiff - idleDiff) / totalDiff) * 100))
+      Math.min(100, Math.round(((totalDiff - idleDiff) / totalDiff) * 100)),
     );
   }
   return lastCpuPercent;
 }
 
-export class CampaignManager {
-  private campaigns: Map<string, CampaignRecord> = new Map();
-  private activeControl: Map<
+interface Supervision {
+  version: 1;
+  generation: string;
+  reason: string;
+  lastCheckpoint: string;
+  validatedBatches: number;
+  pendingBatches: number;
+  runningBatches: number;
+  failedBatches: number;
+  retries: number;
+  lastError?: string;
+  partial: boolean;
+}
+export type ManagedRecord = CampaignRecord & {
+  orchestration?: Supervision;
+  partialResults?: { variantId: string; tableSummaries: TableConfigSummary[] };
+};
+interface State {
+  record: ManagedRecord;
+  generation: string;
+  seq: number;
+  v: number;
+  t: number;
+  g: number;
+  batchSize: number;
+  rngState?: number;
+  partial: TableConfigSummary[];
+  traces: VariantEvaluationResult["sampleTraces"];
+  violations: number;
+  sums: Record<
     string,
-    { paused: boolean; stopped: boolean; lastSavedAt: number }
-  > = new Map();
-  private store: CampaignStore;
-
-  constructor(options: {campaignsDir?: string; createReference?: boolean} = {}) {
-    const campaignsDir = options.campaignsDir ?? CAMPAIGNS_DIR;
-    this.store = new CampaignStore(campaignsDir);
-    this.loadCampaignsFromDisk();
-    if (options.createReference !== false && this.campaigns.size === 0 && !fs.readdirSync(campaignsDir).some(f => f.endsWith('.json'))) {
-      this.createInitialReferenceCampaign();
+    {
+      surv: number;
+      lost: number;
+      exp: number;
+      defeats: number;
+      miracles: number;
+    }
+  >;
+}
+interface Options {
+  campaignsDir?: string;
+  createReference?: boolean;
+  pool?: Partial<PoolOptions>;
+  batchSize?: number;
+  maxCampaigns?: number;
+  beforeCheckpoint?: () => void;
+}
+const clone = <T>(x: T): T => structuredClone(x);
+export class CampaignManager {
+  private store: DurableStore;
+  private pool: WorkerPool;
+  private states = new Map<string, State>();
+  private legacy = new Map<string, CampaignRecord>();
+  private loops = new Map<string, Promise<void>>();
+  private closed = false;
+  private closing?: Promise<void>;
+  private options: Options;
+  private maxCampaigns: number;
+  private batchSize: number;
+  constructor(options: Options = {}) {
+    this.options = options;
+    this.batchSize =
+      options.batchSize ?? envInt("AMAZONIA_BATCH_SIZE", 80, 250);
+    this.maxCampaigns =
+      options.maxCampaigns ?? envInt("AMAZONIA_CAMPAIGNS", 2, 32);
+    const config: PoolOptions = {
+      workers: WORKER_POOL_SIZE,
+      queue: envInt("AMAZONIA_QUEUE", 4, 64),
+      timeoutMs: envInt("AMAZONIA_TIMEOUT_MS", 120000, 3600000),
+      retries: envInt("AMAZONIA_ATTEMPTS", 3, 10) - 1,
+      ...options.pool,
+    };
+    if (
+      !Number.isInteger(this.batchSize) ||
+      this.batchSize < 1 ||
+      this.batchSize > 250 ||
+      config.workers < 1 ||
+      config.queue < 0 ||
+      config.timeoutMs < 1 ||
+      config.retries < 0 ||
+      this.maxCampaigns < 1 ||
+      this.maxCampaigns > config.workers + config.queue
+    )
+      throw new Error("Ressources invalides");
+    const root = options.campaignsDir ?? path.resolve("data/campaigns");
+    this.store = new DurableStore(root);
+    this.pool = new WorkerPool(config);
+    try {
+      for (const r of new CampaignStore(root).load()) {
+        if (r.status === "RUNNING") {
+          r.status = "PAUSED";
+          r.progress.currentPhaseLabel =
+            "Historique interrompu : checkpoint de lots indisponible";
+        }
+        this.legacy.set(r.id, r);
+      }
+      for (const row of this.store.db
+        .prepare("SELECT * FROM campaigns")
+        .all() as unknown as { id: string; body: string; deleted: number }[]) {
+        this.legacy.delete(row.id);
+        if (row.deleted) continue;
+        const s = JSON.parse(row.body) as State;
+        if (
+          s.record.status === "RUNNING" ||
+          (s.record.status === "PAUSED" &&
+            s.record.orchestration!.runningBatches)
+        ) {
+          s.record.status = "PAUSED";
+          s.record.orchestration!.reason = "INTERRUPTED";
+          s.record.orchestration!.runningBatches = 0;
+          s.record.progress.currentPhaseLabel =
+            "Interrompue : reprise explicite disponible";
+        }
+        s.record.orchestration!.runningBatches = 0;
+        this.states.set(row.id, s);
+        this.store.transaction(() => {
+          this.store.db
+            .prepare(
+              "UPDATE batches SET state=? WHERE id=? AND generation=? AND state='RUNNING'",
+            )
+            .run(
+              s.record.status === "STOPPED" ? "CANCELLED" : "PENDING",
+              row.id,
+              s.generation,
+            );
+          this.persist(s);
+        });
+      }
+    } catch (e) {
+      this.store.close();
+      throw e;
     }
   }
-
-  public getSystemTelemetry() {
-    const pool = sharedWorkerPool.getPoolStats();
-    const loadAvg = os.loadavg();
-    const mem = process.memoryUsage();
+  private persist(s: State) {
+    this.store.db
+      .prepare(
+        "INSERT INTO campaigns(id,generation,body,deleted) VALUES(?,?,?,0) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,body=excluded.body,deleted=0",
+      )
+      .run(s.record.id, s.generation, JSON.stringify(s));
+  }
+  getSystemTelemetry() {
     return {
       cpuCount: TOTAL_CPU_CORES,
-      workersCount: WORKER_POOL_SIZE,
-      busyWorkers: pool.busyWorkers,
-      queuedTasks: pool.queuedTasks,
+      ...this.pool.stats,
       cpuPercent: measureVmCpuPercent(),
-      loadAvg1m: Number((loadAvg[0] || 0).toFixed(2)),
-      rssMemoryMb: Math.round(mem.rss / (1024 * 1024)),
-      activeCampaigns: this.listCampaigns().filter((c) => c.status === 'RUNNING').length,
+      loadAvg1m: os.loadavg()[0],
+      rssMemoryMb: Math.round(process.memoryUsage().rss / 1048576),
+      activeCampaigns: this.loops.size,
     };
   }
-
-  private loadCampaignsFromDisk(): void {
-    for (const record of this.store.load()) {
-      if (record.status === 'RUNNING') {
-        record.status = 'PAUSED';
-        record.progress.currentPhaseLabel = 'Interrompu par redémarrage serveur';
-      }
-      this.campaigns.set(record.id, record);
-    }
+  listCampaigns() {
+    return [
+      ...this.legacy.values(),
+      ...[...this.states.keys()].map((id) => this.getCampaign(id)!),
+    ].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
-
-  public async saveToDiskAsync(record: CampaignRecord): Promise<void> {
-    if (this.campaigns.get(record.id) !== record) return;
-    try { await this.store.save(record); }
-    catch (err) { console.error('Échec sauvegarde campagne', record.id, err); }
-  }
-
-  public listCampaigns(): CampaignRecord[] {
-    return Array.from(this.campaigns.values()).sort(
-      (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+  getCampaign(id: string): ManagedRecord | undefined {
+    validateCampaignId(id);
+    const s = this.states.get(id);
+    if (!s) return clone(this.legacy.get(id));
+    const r = clone(s.record);
+    r.orchestration!.pendingBatches = Math.max(
+      0,
+      r.orchestration!.pendingBatches - r.orchestration!.runningBatches,
     );
-  }
-
-  public getCampaign(id: string): CampaignRecord | undefined {
-    return this.campaigns.get(id);
-  }
-
-  public deleteCampaign(id: string): boolean {
-    const ctrl = this.activeControl.get(id);
-    if (ctrl) {
-      ctrl.stopped = true;
-      this.activeControl.delete(id);
+    r.variantResults = (
+      this.store.db
+        .prepare(
+          "SELECT body FROM variants WHERE id=? AND generation=? ORDER BY idx",
+        )
+        .all(id, s.generation) as unknown as { body: string }[]
+    ).map((x) => JSON.parse(x.body));
+    if (
+      s.record.config.type !== "ORACLE_STRESS_TEST" &&
+      s.v < s.record.progress.totalVariants
+    ) {
+      const tables = clone(s.partial);
+      const rows = this.store.db
+        .prepare(
+          "SELECT result FROM batches WHERE id=? AND generation=? AND result IS NOT NULL ORDER BY seq",
+        )
+        .all(id, s.generation) as unknown as { result: string }[];
+      if (rows.length)
+        tables.push(
+          summarizeTableGames(
+            tablesFor(s.record.config)[s.t],
+            rows.flatMap((x) => JSON.parse(x.result)),
+          ),
+        );
+      if (tables.length)
+        r.partialResults = {
+          variantId: expandParameterSweep(s.record.config.sweep)[s.v].variantId,
+          tableSummaries: tables,
+        };
     }
-    this.campaigns.delete(id);
-    void this.store.remove(id).catch(err => console.error('Échec suppression campagne', err));
-    return true;
+    return r;
   }
-
-  public pauseCampaign(id: string): CampaignRecord | undefined {
-    const record = this.campaigns.get(id);
-    const ctrl = this.activeControl.get(id);
-    if (record && ctrl && record.status === 'RUNNING') {
-      ctrl.paused = true;
-      record.status = 'PAUSED';
-      record.updatedAt = new Date().toISOString();
-      record.progress.currentPhaseLabel = 'En pause (Supervision utilisateur)';
-      void this.saveToDiskAsync(record);
-    }
-    return record;
+  private capacity() {
+    if (this.loops.size >= this.maxCampaigns)
+      throw new Error("Limite de campagnes simultanées atteinte");
   }
-
-  public resumeCampaign(id: string): CampaignRecord | undefined {
-    const record = this.campaigns.get(id);
-    if (!record) return undefined;
-    const ctrl = this.activeControl.get(id);
-    if (ctrl) {
-      ctrl.paused = false;
-      record.status = 'RUNNING';
-      record.updatedAt = new Date().toISOString();
-      record.progress.currentPhaseLabel = `Reprise sur ${WORKER_POOL_SIZE} worker(s) CPU...`;
-    } else if (record.status === 'PAUSED' && record.config.type === 'ORACLE_STRESS_TEST') {
-      record.status = 'RUNNING';
-      void this.runStressTestLoop(record);
-    }
-    return record;
-  }
-
-  public stopCampaign(id: string): CampaignRecord | undefined {
-    const record = this.campaigns.get(id);
-    const ctrl = this.activeControl.get(id);
-    if (record) {
-      if (ctrl) {
-        ctrl.stopped = true;
-      }
-      record.status = 'STOPPED';
-      record.completedAt = new Date().toISOString();
-      record.updatedAt = record.completedAt;
-      record.progress.currentPhaseLabel = 'Arrêté et consolidé sur demande';
-      void this.saveToDiskAsync(record);
-    }
-    return record;
-  }
-
-  public startCampaign(config: CampaignConfig): CampaignRecord {
+  startCampaign(config: CampaignConfig) {
+    if (this.closed) throw new Error("Gestionnaire fermé");
     validateCampaignConfig(config);
-    if (this.campaigns.has(config.id)) throw new Error('Identifiant déjà utilisé');
-    const now = new Date().toISOString();
-    const variants = expandParameterSweep(config.sweep);
-    const totalVariants = variants.length;
-
-    const tablesToUse = this.resolveTablesForCampaign(config);
-    let totalTargetGames = 0;
-    if (config.type === 'MONTE_CARLO_SWEEP' || config.type === 'FIVE_LEVERS_ABLATION') {
-      totalTargetGames =
-        totalVariants * Math.max(1, tablesToUse.length) * config.gamesPerVariantAndTable;
-    } else {
-      totalTargetGames = config.maxTotalGames || 50000;
-    }
-
-    const record: CampaignRecord = {
-      id: config.id,
-      config,
-      status: 'RUNNING',
-      startedAt: now,
-      updatedAt: now,
-      progress: {
-        completedGames: 0,
-        totalTargetGames,
-        completedVariants: 0,
-        totalVariants,
+    this.capacity();
+    if (this.states.has(config.id) || this.legacy.has(config.id))
+      throw new Error("Identifiant déjà utilisé");
+    const variants = expandParameterSweep(config.sweep),
+      tables = tablesFor(config),
+      stress = config.type === "ORACLE_STRESS_TEST";
+    const total = stress
+      ? config.maxTotalGames || 50000
+      : variants.length * tables.length * config.gamesPerVariantAndTable;
+    const now = new Date().toISOString(),
+      generation = randomUUID();
+    const s: State = {
+      generation,
+      seq: 0,
+      v: 0,
+      t: 0,
+      g: 0,
+      batchSize: this.batchSize,
+      partial: [],
+      traces: [],
+      violations: 0,
+      sums: {},
+      record: {
+        id: config.id,
+        config: clone(config),
+        status: "RUNNING",
+        startedAt: now,
+        updatedAt: now,
+        progress: {
+          completedGames: 0,
+          totalTargetGames: total,
+          completedVariants: 0,
+          totalVariants: variants.length,
+          elapsedSeconds: 0,
+          gamesPerSecond: 0,
+          currentPhaseLabel: "Campagne serveur acceptée",
+        },
+        variantResults: [],
+        orchestration: {
+          version: 1,
+          generation,
+          reason: "RUNNING",
+          lastCheckpoint: now,
+          validatedBatches: 0,
+          pendingBatches: stress
+            ? Math.ceil(total / this.batchSize)
+            : variants.length *
+              tables.length *
+              Math.ceil(config.gamesPerVariantAndTable / this.batchSize),
+          runningBatches: 0,
+          failedBatches: 0,
+          retries: 0,
+          partial: true,
+        },
+      },
+    };
+    if (stress)
+      s.record.stressTelemetry = {
+        totalGamesSimulated: 0,
+        totalTurnsSimulated: 0,
         elapsedSeconds: 0,
         gamesPerSecond: 0,
-        currentPhaseLabel: `Initialisation sur ${WORKER_POOL_SIZE} worker(s) multi-cœurs (${TOTAL_CPU_CORES} vCPU détectés)...`,
-      },
-      variantResults: [],
-      stressTelemetry:
-        config.type === 'ORACLE_STRESS_TEST'
-          ? {
-              totalGamesSimulated: 0,
-              totalTurnsSimulated: 0,
-              elapsedSeconds: 0,
-              gamesPerSecond: 0,
-              invariantsVerifiedCount: 0,
-              violationsCount: 0,
-              violationsLog: [],
-              totalExplosionsObserved: 0,
-              totalParryAndHSObserved: 0,
-              totalTrapsAndSabotagesObserved: 0,
-              scoreDistributionByBotLevel: {
-                BLIND: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                PROB_ONLY: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                SOLO_INFORMED: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                COORD_NO_DICE: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                COORD_ONE_SHOT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                COORD_HYBRID: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-                OMNISCIENT: { games: 0, meanSurvivalHorizon: 0, meanTreesLost: 0, meanExplosions: 0, defeatRate: 0, miracleRate: 0 },
-              },
-              capturedExtremeLogs: [],
-            }
-          : undefined,
-    };
-
-    this.campaigns.set(record.id, record);
-    void this.saveToDiskAsync(record);
-
-    if (config.type === 'MONTE_CARLO_SWEEP' || config.type === 'FIVE_LEVERS_ABLATION') {
-      void this.runEvaluationSweepLoop(record, variants, tablesToUse);
-    } else {
-      void this.runStressTestLoop(record);
-    }
-
-    return record;
+        invariantsVerifiedCount: 0,
+        violationsCount: 0,
+        violationsLog: [],
+        totalExplosionsObserved: 0,
+        totalParryAndHSObserved: 0,
+        totalTrapsAndSabotagesObserved: 0,
+        scoreDistributionByBotLevel: Object.fromEntries(
+          BOTS.map((b) => [
+            b,
+            {
+              games: 0,
+              meanSurvivalHorizon: 0,
+              meanTreesLost: 0,
+              meanExplosions: 0,
+              defeatRate: 0,
+              miracleRate: 0,
+            },
+          ]),
+        ) as NonNullable<
+          CampaignRecord["stressTelemetry"]
+        >["scoreDistributionByBotLevel"],
+        capturedExtremeLogs: [],
+      };
+    this.store.transaction(() => this.persist(s));
+    this.states.set(s.record.id, s);
+    this.launch(s);
+    return this.getCampaign(config.id)!;
   }
-
-  private resolveTablesForCampaign(config: CampaignConfig): TableConfig[] {
-    const selected =
-      config.selectedTableConfigs && config.selectedTableConfigs.length > 0
-        ? [...config.selectedTableConfigs]
-        : [...DEFAULT_TABLE_CONFIGS];
-
-    if (config.includeCalibrationTables) {
-      for (const def of DEFAULT_TABLE_CONFIGS) {
-        if (!selected.some((t) => t.id === def.id)) {
-          selected.push(def);
-        }
-      }
-    }
-    return selected;
-  }
-
-  // ============================================================================
-  // EXÉCUTION MULTI-CŒURS : BALAYAGE MONTE-CARLO & ABLATION DES LEVIERS v3.2
-  // ============================================================================
-  private async runEvaluationSweepLoop(
-    record: CampaignRecord,
-    variants: ReturnType<typeof expandParameterSweep>,
-    tablesToUse: TableConfig[]
-  ): Promise<void> {
-    const ctrl = { paused: false, stopped: false, lastSavedAt: Date.now() };
-    this.activeControl.set(record.id, ctrl);
-
-    const startTimeMs = Date.now();
-    const targetG = record.config.gamesPerVariantAndTable;
-    const baseSeed = record.config.baseSeed || 42000;
-    const chunkSize = Math.max(
-      25,
-      Math.min(250, Math.ceil(targetG / Math.max(1, WORKER_POOL_SIZE)))
-    );
-
-    for (let vIdx = 0; vIdx < variants.length; vIdx++) {
-      if (ctrl.stopped) break;
-      const vSpec = variants[vIdx];
-
-      record.progress.currentPhaseLabel = `[${WORKER_POOL_SIZE} workers] Variante ${vIdx + 1}/${variants.length} (${vSpec.variantLabel})`;
-
-      const tableGamesMap: SingleGameResult[][] = tablesToUse.map(() => []);
-      const chunkPromises: Promise<void>[] = [];
-
-      for (let tIdx = 0; tIdx < tablesToUse.length; tIdx++) {
-        const table = tablesToUse[tIdx];
-
-        for (let startG = 0; startG < targetG; startG += chunkSize) {
-          const endG = Math.min(targetG, startG + chunkSize);
-          const jobs: Array<{ seed: number; recordTrace: boolean }> = [];
-          for (let g = startG; g < endG; g++) {
-            jobs.push({
-              seed: baseSeed + g + 1,
-              recordTrace: vIdx < 12 && g < 1,
-            });
-          }
-
-          const p = (async () => {
-            while (ctrl.paused && !ctrl.stopped) {
-              await new Promise((r) => setTimeout(r, 200));
-            }
-            if (ctrl.stopped) return;
-
-            const resp = await sharedWorkerPool.runEvalBatch({
-              params: vSpec.params,
-              tableId: table.id,
-              botProfiles: table.botProfiles,
-              jobs,
-            });
-
-            if (ctrl.stopped) return;
-
-            tableGamesMap[tIdx].push(...resp.results);
-            record.progress.completedGames += resp.results.length;
-            const elapsedSec = Math.max(0.05, (Date.now() - startTimeMs) / 1000);
-            record.progress.elapsedSeconds = elapsedSec;
-            record.progress.gamesPerSecond =
-              record.progress.completedGames / elapsedSec;
-            record.updatedAt = new Date().toISOString();
-
-            if (Date.now() - ctrl.lastSavedAt >= PERIODIC_SAVE_INTERVAL_MS) {
-              ctrl.lastSavedAt = Date.now();
-              void this.saveToDiskAsync(record);
-            }
-          })();
-
-          chunkPromises.push(p);
-        }
-      }
-
-      await Promise.all(chunkPromises);
-      if (ctrl.stopped) break;
-
-      const variantTableSummaries: VariantEvaluationResult['tableSummaries'] = [];
-      const variantSampleTraces: VariantEvaluationResult['sampleTraces'] = [];
-      let violationsCount = 0;
-
-      for (let tIdx = 0; tIdx < tablesToUse.length; tIdx++) {
-        const table = tablesToUse[tIdx];
-        const sortedGames = tableGamesMap[tIdx].sort((a, b) => a.seed - b.seed);
-
-        for (const gRes of sortedGames) {
-          violationsCount += gRes.violations.length;
-          if (gRes.textualJournal && variantSampleTraces.length < 6) {
-            variantSampleTraces.push({
-              seed: gRes.seed,
-              tableConfigName: table.name,
-              survivalRateHorizon: gRes.survivalRateHorizon,
-              totalTreesLost: gRes.totalTreesLost,
-              explosionsCount: gRes.explosionsCount,
-              victoryBracket: gRes.victoryBracket,
-              textualJournal: gRes.textualJournal,
-            });
-          }
-        }
-
-        variantTableSummaries.push(summarizeTableGames(table, sortedGames));
-      }
-
-      const criteria = evaluateFourCriteria(vSpec.params, variantTableSummaries);
-
-      record.variantResults.push({
-        variantId: vSpec.variantId,
-        variantLabel: vSpec.variantLabel,
-        leversCode: vSpec.leversCode,
-        params: vSpec.params,
-        tableSummaries: variantTableSummaries,
-        criteria,
-        invariantViolationsCount: violationsCount,
-        sampleTraces: variantSampleTraces,
-      });
-
-      record.progress.completedVariants = vIdx + 1;
-      record.updatedAt = new Date().toISOString();
-
-      if (Date.now() - ctrl.lastSavedAt >= PERIODIC_SAVE_INTERVAL_MS) {
-        ctrl.lastSavedAt = Date.now();
-        void this.saveToDiskAsync(record);
-      }
-    }
-
-    if (!ctrl.stopped) {
-      const elapsedSec = Math.max(0.05, (Date.now() - startTimeMs) / 1000);
-      record.progress.elapsedSeconds = elapsedSec;
-      record.progress.gamesPerSecond = record.progress.completedGames / elapsedSec;
-      record.status = 'COMPLETED';
-      record.completedAt = new Date().toISOString();
-      record.updatedAt = record.completedAt;
-      record.progress.currentPhaseLabel = `Campagne terminée sur ${WORKER_POOL_SIZE} worker(s) (${record.variantResults.length} variante(s) évaluée(s))`;
-      await this.saveToDiskAsync(record);
-    }
-
-    this.activeControl.delete(record.id);
-  }
-
-  // ============================================================================
-  // EXÉCUTION MULTI-CŒURS : STRESS-TEST LONGUE DURÉE SUR VM ORACLE (v3.2)
-  // ============================================================================
-  private async runStressTestLoop(record: CampaignRecord): Promise<void> {
-    const ctrl = { paused: false, stopped: false, lastSavedAt: Date.now() };
-    this.activeControl.set(record.id, ctrl);
-
-    const startTimeMs = Date.now() - (record.progress.elapsedSeconds || 0) * 1000;
-    const variants = expandParameterSweep(record.config.sweep);
-    const paramRng = new SeededRNG(
-      (record.config.baseSeed || 77777) + record.progress.completedGames
-    );
-    const botLevels: BotProfileId[] = [
-      'BLIND',
-      'PROB_ONLY',
-      'SOLO_INFORMED',
-      'COORD_NO_DICE',
-      'COORD_ONE_SHOT',
-      'COORD_HYBRID',
-      'OMNISCIENT',
-    ];
-
-    const telemetry = record.stressTelemetry!;
-    const botSums: Record<
-      BotProfileId,
-      { sumSurv: number; sumLost: number; sumExp: number; defeats: number; miracles: number }
-    > = {
-      BLIND: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      PROB_ONLY: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      SOLO_INFORMED: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      COORD_NO_DICE: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      COORD_ONE_SHOT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      COORD_HYBRID: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-      OMNISCIENT: { sumSurv: 0, sumLost: 0, sumExp: 0, defeats: 0, miracles: 0 },
-    };
-
-    for (const b of botLevels) {
-      const existing = telemetry.scoreDistributionByBotLevel[b];
-      if (existing && existing.games > 0) {
-        botSums[b].sumSurv = existing.meanSurvivalHorizon * existing.games;
-        botSums[b].sumLost = existing.meanTreesLost * existing.games;
-        botSums[b].sumExp = existing.meanExplosions * existing.games;
-        botSums[b].defeats = Math.round(existing.defeatRate * existing.games);
-        botSums[b].miracles = Math.round(existing.miracleRate * existing.games);
-      }
-    }
-
-    const maxGames = record.config.maxTotalGames || 100000;
-    const maxDurationSec = record.config.targetDurationSeconds || null;
-    let nextGameIdx = telemetry.totalGamesSimulated;
-    const gamesPerWorkerBatch = 80;
-
-    const caps: TacticalDefenderCap[] = [99, 2, 1];
-    const shifts: CombatThresholdShift[] = [0, 1];
-    const parryRules: ParryHsRule[] = ['SYNERGY_TRAP_SAB', 'STANDARD_S3'];
-    const bullActions: BulldozerZeroStumpAction[] = ['DESTROY_TREE', 'NONE'];
-    const presets: TacticsTrackPreset[] = ['ASSAULT_LOW', 'ASSAULT_HIGH'];
-
-    while (!ctrl.stopped) {
-      if (ctrl.paused) {
-        await new Promise((r) => setTimeout(r, 250));
-        continue;
-      }
-
-      const currentElapsedSec = (Date.now() - startTimeMs) / 1000;
-      if (telemetry.totalGamesSimulated >= maxGames) break;
-      if (maxDurationSec !== null && currentElapsedSec >= maxDurationSec) break;
-
-      const wavePromises: Promise<StressBatchWorkerResponse>[] = [];
-      for (let w = 0; w < WORKER_POOL_SIZE; w++) {
-        const remaining = maxGames - nextGameIdx;
-        if (remaining <= 0) break;
-        const batchCount = Math.min(gamesPerWorkerBatch, remaining);
-        const jobs: StressBatchWorkerRequest['jobs'] = [];
-
-        for (let i = 0; i < batchCount; i++) {
-          const gameIdx = nextGameIdx++;
-          const seed = (record.config.baseSeed || 900000) + gameIdx + 1;
-          let params: SimulationConfig;
-
-          if (record.config.randomizeParametersInStress) {
-            const n = paramRng.nextInt(3, 6);
-            const preset = presets[paramRng.nextInt(0, presets.length - 1)];
-            params = {
-              numPlayers: n,
-              numTurns: paramRng.nextInt(6, 12),
-              initialTreesPerCell: paramRng.nextInt(2, 3),
-              tacticsTrackPreset: preset,
-              tacticsTrackSetup: [...TACTICS_TRACK_PRESETS[preset].setup],
-              shuffleTacticsTrack: paramRng.nextFloat() < 0.25,
-              tacticalDefenderCap: caps[paramRng.nextInt(0, caps.length - 1)],
-              combatThresholdShift: shifts[paramRng.nextInt(0, shifts.length - 1)],
-              parryHsRule: parryRules[paramRng.nextInt(0, parryRules.length - 1)],
-              bulldozerZeroStumpAction: bullActions[paramRng.nextInt(0, bullActions.length - 1)],
-              initialStumpCell2: paramRng.nextFloat() < 0.75,
-            };
-          } else {
-            params = variants[gameIdx % variants.length].params;
-          }
-
-          const botProfile = botLevels[gameIdx % botLevels.length];
-          jobs.push({ seed, params, botProfile });
-        }
-
-        wavePromises.push(
-          sharedWorkerPool.runStressBatch({
-            jobs,
-            needDetailedCapture: telemetry.capturedExtremeLogs.length < 12,
-          })
+  private change(id: string, status: CampaignRecord["status"], reason: string) {
+    validateCampaignId(id);
+    const old = this.states.get(id);
+    if (!old) {
+      if (this.legacy.has(id))
+        throw new Error(
+          "Campagne historique en lecture seule : aucun checkpoint exact disponible",
         );
-      }
-
-      if (wavePromises.length === 0) break;
-
-      const waveResponses = await Promise.all(wavePromises);
-      if (ctrl.stopped) break;
-
-      for (const batchResp of waveResponses) {
-        for (const item of batchResp.outcomes) {
-          const {
-            seed,
-            params,
-            botProfile,
-            res,
-            captureCategory,
-            captureSummary,
-            detailedJournal,
-          } = item;
-
-          telemetry.totalGamesSimulated += 1;
-          telemetry.totalTurnsSimulated += params.numTurns;
-          telemetry.invariantsVerifiedCount += params.numTurns * 4;
-          telemetry.totalExplosionsObserved += res.explosionsCount;
-          telemetry.totalParryAndHSObserved += res.parryAndHSCount;
-          telemetry.totalTrapsAndSabotagesObserved +=
-            res.trapsPlacedCount + res.sabotagesPlacedCount;
-
-          const bStat = telemetry.scoreDistributionByBotLevel[botProfile];
-          const bSum = botSums[botProfile];
-          bStat.games += 1;
-          bSum.sumSurv += res.survivalRateHorizon;
-          bSum.sumLost += res.totalTreesLost;
-          bSum.sumExp += res.explosionsCount;
-          if (res.victoryBracket === 'DEFEAT') bSum.defeats += 1;
-          if (res.victoryBracket === 'MIRACLE') bSum.miracles += 1;
-          bStat.meanSurvivalHorizon = bSum.sumSurv / bStat.games;
-          bStat.meanTreesLost = bSum.sumLost / bStat.games;
-          bStat.meanExplosions = bSum.sumExp / bStat.games;
-          bStat.defeatRate = bSum.defeats / bStat.games;
-          bStat.miracleRate = bSum.miracles / bStat.games;
-
-          if (res.violations.length > 0) {
-            telemetry.violationsCount += res.violations.length;
-            for (const v of res.violations) {
-              if (telemetry.violationsLog.length < 50) {
-                telemetry.violationsLog.push(v);
-              }
-            }
-          }
-
-          if (captureCategory && telemetry.capturedExtremeLogs.length < 12) {
-            const alreadyHasCategoryCount = telemetry.capturedExtremeLogs.filter(
-              (l) => l.category === captureCategory
-            ).length;
-            if (alreadyHasCategoryCount < 3 || captureCategory === 'INVARIANT_VIOLATION') {
-              telemetry.capturedExtremeLogs.push({
-                seed,
-                category: captureCategory,
-                summary: captureSummary,
-                params,
-                textualJournal: detailedJournal || '',
-              });
-            }
-          }
-        }
-      }
-
-      const elapsedSec = Math.max(0.05, (Date.now() - startTimeMs) / 1000);
-      telemetry.elapsedSeconds = elapsedSec;
-      telemetry.gamesPerSecond = telemetry.totalGamesSimulated / elapsedSec;
-      record.progress.completedGames = telemetry.totalGamesSimulated;
-      record.progress.elapsedSeconds = elapsedSec;
-      record.progress.gamesPerSecond = telemetry.gamesPerSecond;
-      record.progress.currentPhaseLabel = `Stress-Test [${WORKER_POOL_SIZE} workers] : ${telemetry.totalGamesSimulated.toLocaleString('fr-FR')} parties (${telemetry.gamesPerSecond.toFixed(0)} p/s)`;
-      record.updatedAt = new Date().toISOString();
-
-      if (Date.now() - ctrl.lastSavedAt >= PERIODIC_SAVE_INTERVAL_MS) {
-        ctrl.lastSavedAt = Date.now();
-        void this.saveToDiskAsync(record);
-      }
+      return undefined;
     }
-
-    if (!ctrl.stopped) {
-      record.status = 'COMPLETED';
-      record.completedAt = new Date().toISOString();
-      record.updatedAt = record.completedAt;
-      record.progress.currentPhaseLabel = `Stress-Test terminé (${telemetry.totalGamesSimulated.toLocaleString('fr-FR')} parties vérifiées sur ${WORKER_POOL_SIZE} workers)`;
-      await this.saveToDiskAsync(record);
+    if (["COMPLETED", "STOPPED"].includes(old.record.status))
+      return this.getCampaign(id);
+    if (
+      status === "RUNNING" &&
+      old.record.status !== "RUNNING" &&
+      !this.loops.has(old.generation)
+    )
+      this.capacity();
+    const s = clone(old);
+    s.record.status = status;
+    if (status === "RUNNING") delete s.record.errorMessage;
+    s.record.orchestration!.reason = reason;
+    s.record.progress.currentPhaseLabel = reason;
+    s.record.updatedAt = new Date().toISOString();
+    if (status === "STOPPED") {
+      s.record.completedAt = s.record.updatedAt;
+      s.record.orchestration!.pendingBatches = 0;
     }
-
-    this.activeControl.delete(record.id);
+    this.store.transaction(() => this.persist(s));
+    this.states.set(s.record.id, s);
+    if (status === "RUNNING") this.launch(s);
+    return this.getCampaign(id);
   }
-
-  /**
-   * Génère au premier lancement une campagne de référence v3.3 comparant
-   * les leviers fins (Cap, Shift, Synergie Mise HS) sur les invariants figés v3.2
-   * et mesurant les 5 Gains Décisionnels sur les 7 profils gradués orthogonaux.
-   */
-  private createInitialReferenceCampaign(): void {
-    const config: CampaignConfig = {
-      id: 'camp_ref_v33_shapley_7bots',
-      name: 'Campagne de Référence v3.3 — Invariants v3.2 Figés, Synergie Mise HS & Décomposition Shapley (7 Bots)',
-      type: 'FIVE_LEVERS_ABLATION',
-      createdAt: new Date().toISOString(),
-      gamesPerVariantAndTable: 50,
-      sweep: {
-        numPlayersValues: [4],
-        numTurnsValues: [8],
-        initialTreesPerCellValues: [2],
-        tacticalDefenderCapValues: [2, 1],
-        combatThresholdShiftValues: [0, 1],
-        parryHsRuleValues: ['SYNERGY_TRAP_SAB', 'STANDARD_S3'],
-        bulldozerZeroStumpActionValues: ['DESTROY_TREE'],
-        initialStumpCell2Values: [true],
-        tacticsTrackPresetValues: ['ASSAULT_LOW'],
-        shuffleTacticsTrackValues: [false],
-      },
-      selectedTableConfigs: DEFAULT_TABLE_CONFIGS,
-      includeCalibrationTables: true,
-      baseSeed: 42000,
-    };
-
-    const variants = expandParameterSweep(config.sweep);
-    const tables = DEFAULT_TABLE_CONFIGS;
-    const variantResults: VariantEvaluationResult[] = [];
-    const startTime = Date.now();
-    let completedGames = 0;
-
-    for (const vSpec of variants) {
-      const summaries: VariantEvaluationResult['tableSummaries'] = [];
-      const sampleTraces: VariantEvaluationResult['sampleTraces'] = [];
-      let violationsCount = 0;
-
-      for (const tc of tables) {
-        const games: SingleGameResult[] = [];
-        for (let g = 0; g < config.gamesPerVariantAndTable; g++) {
-          const seed = config.baseSeed + g + 1;
-          const res = runSingleGame(vSpec.params, tc.botProfiles, seed, tc.id, g < 1);
-          games.push(res);
-          completedGames++;
-          violationsCount += res.violations.length;
-          if (res.textualJournal && sampleTraces.length < 4) {
-            sampleTraces.push({
-              seed: res.seed,
-              tableConfigName: tc.name,
-              survivalRateHorizon: res.survivalRateHorizon,
-              totalTreesLost: res.totalTreesLost,
-              explosionsCount: res.explosionsCount,
-              victoryBracket: res.victoryBracket,
-              textualJournal: res.textualJournal,
-            });
-          }
-        }
-        summaries.push(summarizeTableGames(tc, games));
-      }
-
-      const criteria = evaluateFourCriteria(vSpec.params, summaries);
-      variantResults.push({
-        variantId: vSpec.variantId,
-        variantLabel: vSpec.variantLabel,
-        leversCode: vSpec.leversCode,
-        params: vSpec.params,
-        tableSummaries: summaries,
-        criteria,
-        invariantViolationsCount: violationsCount,
-        sampleTraces,
-      });
+  pauseCampaign(id: string) {
+    return this.change(id, "PAUSED", "USER_PAUSED");
+  }
+  stopCampaign(id: string) {
+    return this.change(id, "STOPPED", "USER_STOPPED");
+  }
+  resumeCampaign(id: string) {
+    return this.change(id, "RUNNING", "RUNNING");
+  }
+  deleteCampaign(id: string) {
+    validateCampaignId(id);
+    const s = this.states.get(id);
+    const r = s ?? { record: this.legacy.get(id) };
+    if (!r.record) return false;
+    this.store.transaction(() => {
+      this.store.db
+        .prepare(
+          "INSERT INTO campaigns(id,generation,body,deleted) VALUES(?,?,?,1) ON CONFLICT(id) DO UPDATE SET deleted=1",
+        )
+        .run(id, s?.generation ?? "legacy", s ? JSON.stringify(s) : "{}");
+      this.store.db
+        .prepare(
+          "UPDATE batches SET state='CANCELLED' WHERE id=? AND state IN ('PENDING','RUNNING')",
+        )
+        .run(id);
+    });
+    this.states.delete(id);
+    this.legacy.delete(id);
+    return true;
+  }
+  private launch(s: State) {
+    const key = s.generation;
+    if (this.loops.has(key)) return;
+    const p = this.run(s.record.id, key).finally(() => this.loops.delete(key));
+    this.loops.set(key, p);
+  }
+  private current(id: string, generation: string) {
+    const s = this.states.get(id);
+    return s?.generation === generation ? s : undefined;
+  }
+  private plan(s: State): { request: WorkerRequestMessage; nextRng?: number } {
+    const c = s.record.config;
+    if (c.type === "ORACLE_STRESS_TEST") {
+      const count = Math.min(
+        s.batchSize,
+        s.record.progress.totalTargetGames - s.record.progress.completedGames,
+      );
+      const plan = stressParams(
+        c,
+        s.record.progress.completedGames,
+        count,
+        s.rngState,
+      );
+      return {
+        nextRng: plan.state,
+        request: {
+          taskId: s.seq,
+          type: "RUN_STRESS_BATCH",
+          jobs: plan.jobs,
+          needDetailedCapture:
+            (s.record.stressTelemetry?.capturedExtremeLogs.length ?? 0) < 12,
+        },
+      };
     }
-
-    const elapsedSec = Math.max(0.05, (Date.now() - startTime) / 1000);
-    const nowIso = new Date().toISOString();
-
-    const record: CampaignRecord = {
-      id: config.id,
-      config,
-      status: 'COMPLETED',
-      startedAt: nowIso,
-      updatedAt: nowIso,
-      completedAt: nowIso,
-      progress: {
-        completedGames,
-        totalTargetGames: completedGames,
-        completedVariants: variants.length,
-        totalVariants: variants.length,
-        elapsedSeconds: elapsedSec,
-        gamesPerSecond: completedGames / elapsedSec,
-        currentPhaseLabel: `Campagne de référence v3.3 prête (${variants.length} variantes × 7 profils gradués)`,
+    const v = expandParameterSweep(c.sweep)[s.v],
+      t = tablesFor(c)[s.t],
+      end = Math.min(c.gamesPerVariantAndTable, s.g + s.batchSize);
+    return {
+      request: {
+        taskId: s.seq,
+        type: "RUN_EVAL_BATCH",
+        params: v.params,
+        tableId: t.id,
+        botProfiles: t.botProfiles,
+        jobs: Array.from({ length: end - s.g }, (_, i) => ({
+          seed: c.baseSeed + s.g + i + 1,
+          recordTrace: s.v < 12 && s.g + i === 0,
+        })),
       },
-      variantResults,
     };
-
-    this.campaigns.set(record.id, record);
-    void this.saveToDiskAsync(record);
+  }
+  private async run(id: string, generation: string) {
+    try {
+      while (!this.closed) {
+        let s = this.current(id, generation);
+        if (!s || s.record.status !== "RUNNING") return;
+        const plan = this.plan(s),
+          old = this.store.db
+            .prepare(
+              "SELECT request FROM batches WHERE id=? AND generation=? AND seq=?",
+            )
+            .get(id, generation, s.seq) as { request: string } | undefined;
+        const request = old ? JSON.parse(old.request) : plan.request;
+        const assigned = clone(s);
+        assigned.record.orchestration!.runningBatches = 1;
+        assigned.record.progress.currentPhaseLabel = `Lot ${s.seq} en cours (progression durable affichée)`;
+        this.store.transaction(() => {
+          this.store.db
+            .prepare(
+              "INSERT INTO batches(id,generation,seq,state,request) VALUES(?,?,?,'RUNNING',?) ON CONFLICT(id,generation,seq) DO UPDATE SET state='RUNNING'",
+            )
+            .run(id, generation, s!.seq, JSON.stringify(request));
+          this.persist(assigned);
+        });
+        this.states.set(id, assigned);
+        const began = performance.now();
+        const response = await this.pool.run(
+          request,
+          (error) => {
+            const current = this.current(id, generation);
+            if (!current) return;
+            const retry = clone(current);
+            retry.record.orchestration!.retries++;
+            retry.record.orchestration!.lastError = error;
+            this.store.transaction(() => {
+              this.store.db
+                .prepare(
+                  "UPDATE batches SET attempts=attempts+1,error=? WHERE id=? AND generation=? AND seq=?",
+                )
+                .run(error, id, generation, retry.seq);
+              this.persist(retry);
+            });
+            this.states.set(id, retry);
+          },
+          () => {
+            const c = this.current(id, generation);
+            return this.closed || !c || c.record.status === "STOPPED";
+          },
+        );
+        s = this.current(id, generation);
+        if (!s || this.closed) return;
+        const next = clone(s);
+        let variant: VariantEvaluationResult | undefined;
+        let result: SingleGameResult[] | undefined;
+        if (request.type === "RUN_EVAL_BATCH") {
+          if (
+            response.type !== "RUN_EVAL_BATCH_RESULT" ||
+            response.results.length !== request.jobs.length
+          )
+            throw new Error("Résultat de lot incomplet");
+          result = response.results;
+          next.g += result.length;
+          if (next.g === next.record.config.gamesPerVariantAndTable) {
+            const prior = this.store.db
+              .prepare(
+                "SELECT result FROM batches WHERE id=? AND generation=? AND result IS NOT NULL ORDER BY seq",
+              )
+              .all(id, generation) as unknown as { result: string }[];
+            const games = prior
+              .flatMap((x) => JSON.parse(x.result) as SingleGameResult[])
+              .concat(result)
+              .sort((a, b) => a.seed - b.seed);
+            const table = tablesFor(next.record.config)[next.t];
+            next.partial.push(summarizeTableGames(table, games));
+            for (const g of games) {
+              next.violations += g.violations.length;
+              if (g.textualJournal && next.traces.length < 6)
+                next.traces.push({
+                  seed: g.seed,
+                  tableConfigName: table.name,
+                  survivalRateHorizon: g.survivalRateHorizon,
+                  totalTreesLost: g.totalTreesLost,
+                  explosionsCount: g.explosionsCount,
+                  victoryBracket: g.victoryBracket,
+                  textualJournal: g.textualJournal,
+                });
+            }
+            next.t++;
+            next.g = 0;
+            if (next.t === tablesFor(next.record.config).length) {
+              const spec = expandParameterSweep(next.record.config.sweep)[
+                next.v
+              ];
+              variant = {
+                ...spec,
+                tableSummaries: next.partial,
+                criteria: evaluateFourCriteria(spec.params, next.partial),
+                invariantViolationsCount: next.violations,
+                sampleTraces: next.traces,
+              };
+              next.partial = [];
+              next.traces = [];
+              next.violations = 0;
+              next.v++;
+              next.t = 0;
+              next.record.progress.completedVariants = next.v;
+            }
+          }
+          next.record.progress.completedGames += result.length;
+        } else {
+          if (
+            response.type !== "RUN_STRESS_BATCH_RESULT" ||
+            response.outcomes.length !== request.jobs.length
+          )
+            throw new Error("Résultat de stress incomplet");
+          this.accumulateStress(next, response);
+          next.rngState = plan.nextRng;
+          next.record.progress.completedGames += response.outcomes.length;
+        }
+        next.seq++;
+        const o = next.record.orchestration!;
+        o.validatedBatches = next.seq;
+        o.runningBatches = 0;
+        o.pendingBatches = Math.max(0, o.pendingBatches - 1);
+        o.lastCheckpoint = new Date().toISOString();
+        next.record.updatedAt = o.lastCheckpoint;
+        const p = next.record.progress;
+        p.elapsedSeconds += (performance.now() - began) / 1000;
+        p.gamesPerSecond = p.completedGames / Math.max(0.05, p.elapsedSeconds);
+        if (next.record.stressTelemetry) {
+          next.record.stressTelemetry.elapsedSeconds = p.elapsedSeconds;
+          next.record.stressTelemetry.gamesPerSecond = p.gamesPerSecond;
+        }
+        const complete =
+          p.completedGames >= p.totalTargetGames ||
+          (next.record.config.targetDurationSeconds != null &&
+            p.elapsedSeconds >= next.record.config.targetDurationSeconds);
+        if (complete && next.record.status !== "STOPPED") {
+          next.record.status = "COMPLETED";
+          o.reason =
+            p.completedGames >= p.totalTargetGames ? "COMPLETED" : "TIME_LIMIT";
+          o.partial = p.completedGames < p.totalTargetGames;
+          o.pendingBatches = 0;
+          next.record.completedAt = o.lastCheckpoint;
+        }
+        p.currentPhaseLabel = `${o.reason} · ${p.completedGames} parties durables · ${next.seq} lots validés`;
+        this.options.beforeCheckpoint?.();
+        this.store.transaction(() => {
+          const row = this.store.db
+            .prepare(
+              "SELECT state FROM batches WHERE id=? AND generation=? AND seq=?",
+            )
+            .get(id, generation, s!.seq) as { state: string };
+          if (row.state === "VALIDATED") throw new Error("Lot déjà validé");
+          this.store.db
+            .prepare(
+              "UPDATE batches SET state='VALIDATED',result=? WHERE id=? AND generation=? AND seq=?",
+            )
+            .run(
+              result ? JSON.stringify(result) : null,
+              id,
+              generation,
+              s!.seq,
+            );
+          if (request.type === "RUN_EVAL_BATCH" && next.g === 0)
+            this.store.db
+              .prepare(
+                "UPDATE batches SET result=NULL WHERE id=? AND generation=?",
+              )
+              .run(id, generation);
+          if (variant)
+            this.store.db
+              .prepare("INSERT INTO variants VALUES(?,?,?,?)")
+              .run(id, generation, next.v - 1, JSON.stringify(variant));
+          this.persist(next);
+        });
+        this.states.set(id, next);
+      }
+    } catch (error) {
+      const s = this.current(id, generation);
+      if (!s || this.closed) return;
+      if (s.record.status === "STOPPED") {
+        const stopped = clone(s);
+        stopped.record.orchestration!.runningBatches = 0;
+        try {
+          this.store.transaction(() => {
+            this.store.db
+              .prepare(
+                "UPDATE batches SET state='CANCELLED' WHERE id=? AND generation=? AND seq=?",
+              )
+              .run(id, generation, s.seq);
+            this.persist(stopped);
+          });
+        } catch (e) {
+          stopped.record.orchestration!.lastError = (e as Error).message;
+        }
+        this.states.set(id, stopped);
+        return;
+      }
+      const failed = clone(s);
+      failed.record.status = "ERROR";
+      failed.record.errorMessage = (error as Error).message;
+      failed.record.orchestration!.lastError = failed.record.errorMessage;
+      failed.record.orchestration!.failedBatches++;
+      failed.record.orchestration!.runningBatches = 0;
+      failed.record.orchestration!.reason = "ERROR";
+      failed.record.progress.currentPhaseLabel = `Erreur : ${failed.record.errorMessage}`;
+      // Never publish uncommitted progress. If storage is unavailable expose the failure in memory.
+      try {
+        this.store.transaction(() => {
+          this.store.db
+            .prepare(
+              "UPDATE batches SET state='FAILED',error=? WHERE id=? AND generation=? AND seq=?",
+            )
+            .run(
+              failed.record.errorMessage ?? "Erreur",
+              id,
+              generation,
+              failed.seq,
+            );
+          this.persist(failed);
+        });
+      } catch (storageError) {
+        failed.record.errorMessage += ` ; checkpoint impossible : ${(storageError as Error).message}`;
+      }
+      this.states.set(id, failed);
+    }
+  }
+  private accumulateStress(s: State, response: StressBatchWorkerResponse) {
+    const st = s.record.stressTelemetry!;
+    for (const item of response.outcomes) {
+      const {
+        res,
+        params,
+        botProfile,
+        seed,
+        captureCategory,
+        captureSummary,
+        detailedJournal,
+      } = item;
+      st.totalGamesSimulated++;
+      st.totalTurnsSimulated += params.numTurns;
+      st.invariantsVerifiedCount += params.numTurns * 4;
+      st.totalExplosionsObserved += res.explosionsCount;
+      st.totalParryAndHSObserved += res.parryAndHSCount;
+      st.totalTrapsAndSabotagesObserved +=
+        res.trapsPlacedCount + res.sabotagesPlacedCount;
+      const sums = (s.sums[botProfile] ??= {
+          surv: 0,
+          lost: 0,
+          exp: 0,
+          defeats: 0,
+          miracles: 0,
+        }),
+        stat = st.scoreDistributionByBotLevel[botProfile];
+      stat.games++;
+      sums.surv += res.survivalRateHorizon;
+      sums.lost += res.totalTreesLost;
+      sums.exp += res.explosionsCount;
+      sums.defeats += Number(res.victoryBracket === "DEFEAT");
+      sums.miracles += Number(res.victoryBracket === "MIRACLE");
+      stat.meanSurvivalHorizon = sums.surv / stat.games;
+      stat.meanTreesLost = sums.lost / stat.games;
+      stat.meanExplosions = sums.exp / stat.games;
+      stat.defeatRate = sums.defeats / stat.games;
+      stat.miracleRate = sums.miracles / stat.games;
+      st.violationsCount += res.violations.length;
+      for (const v of res.violations)
+        if (st.violationsLog.length < 50) st.violationsLog.push(v);
+      if (
+        captureCategory &&
+        st.capturedExtremeLogs.length < 12 &&
+        (captureCategory === "INVARIANT_VIOLATION" ||
+          st.capturedExtremeLogs.filter((x) => x.category === captureCategory)
+            .length < 3)
+      )
+        st.capturedExtremeLogs.push({
+          seed,
+          category: captureCategory,
+          summary: captureSummary,
+          params,
+          textualJournal: detailedJournal || "",
+        });
+    }
+  }
+  close() {
+    if (this.closing) return this.closing;
+    this.closed = true;
+    return (this.closing = (async () => {
+      await this.pool.close();
+      await Promise.all([...this.loops.values()]);
+      this.store.close();
+    })());
   }
 }
