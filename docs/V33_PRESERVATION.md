@@ -37,3 +37,7 @@ Aucune authentification ajoutée, aucune modification du portail, aucun déploie
 Restent ouverts : reprise Monte-Carlo après redémarrage, reprise RNG du stress randomisé, quotas CPU globaux, annulation des lots, validation/limitation de simulation unitaire, basculement navigateur sur erreur HTTP, API non authentifiée, statistiques adaptatives et fiabilité scientifique. Les limites par campagne ne bornent pas le nombre de campagnes concurrentes. Le stockage navigateur n'est pas migré ni sécurisé par ce changement.
 
 Pas de changement de dépendances ; l'absence de lockfile reste une limite de reproductibilité des outils. Le gel porte sur le code historique et les sorties enregistrées. Aucun snapshot ni publication cloud n'est effectué par cette mission.
+
+## Évolution 1B.2
+
+La nouvelle orchestration et ses incompatibilités sont décrites dans [LONG_CAMPAIGNS.md](LONG_CAMPAIGNS.md). Les garanties JSON ci-dessus décrivent la couche historique conservée ; les nouvelles campagnes utilisent désormais des checkpoints SQLite transactionnels. Les références scientifiques restent inchangées.
