@@ -1,5 +1,7 @@
 # Mission 1B.5 — adaptateur personnel Caddy / portail
 
+PR coordonnées : [Amazonia #6](https://github.com/antoineacquaviva/Amazonia/pull/6) et [portail #1](https://github.com/antoineacquaviva/atelier-portail-maitre/pull/1). À revoir ensemble ; activation manuelle seulement après accord distinct.
+
 Base : main `cb80c06`, PR #5 fusionnée. Le portail requiert sa PR 1B.5 associée. Aucun déploiement, changement Oracle, données, moteur, bots ou statistiques. Pas de fusion autorisée.
 
 ## Architecture retenue
