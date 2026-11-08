@@ -1,3 +1,5 @@
+import {SCIENTIFIC_PILOT_NOTICE} from '../scientific/pilotNotice';
+import type {ProtocolConfig} from '../scientific/protocol';
 import React, { useMemo, useState } from 'react';
 import {
   BulldozerZeroStumpAction,
@@ -26,6 +28,9 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
   onStartCampaign,
   isSubmitting,
 }) => {
+  const [protocol, setProtocol] = useState<'HISTORICAL_V33'|'SCIENTIFIC_V1'>('HISTORICAL_V33');
+  const [independent, setIndependent] = useState(false);
+  const scientificIds=['TABLE_BLIND','TABLE_PROB','TABLE_SOLO','TABLE_COORD_ONE_SHOT','TABLE_OMNI'];
   const [mode, setMode] = useState<'FIVE_LEVERS_ABLATION' | 'MONTE_CARLO_SWEEP'>(
     'MONTE_CARLO_SWEEP'
   );
@@ -199,24 +204,31 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
   const handleLaunch = async (e: React.FormEvent) => {
     e.preventDefault();
     const selectedTables: TableConfig[] = DEFAULT_TABLE_CONFIGS.filter((t) =>
-      selectedTableIds.includes(t.id)
+      selectedTableIds.includes(t.id) && (protocol==='HISTORICAL_V33'||scientificIds.includes(t.id))
     );
-    await onStartCampaign({
-      name: campaignName.trim() || 'Campagne Monte-Carlo v3.3',
+    const payload: Partial<ProtocolConfig> = {
+      name: protocol==='SCIENTIFIC_V1' ? 'SCIENTIFIC_V1 — '+(campaignName.trim().startsWith('Campagne Monte-Carlo v3.3')?'comparaison de politiques pilotes':campaignName.trim()) : campaignName.trim() || 'Campagne Monte-Carlo v3.3',
       type: mode,
       gamesPerVariantAndTable: gamesPerVariant,
       sweep,
       selectedTableConfigs: selectedTables,
-      includeCalibrationTables: true,
+      includeCalibrationTables: protocol==='HISTORICAL_V33',
       baseSeed,
-    });
+      protocol,
+      ...(protocol==='SCIENTIFIC_V1'?{science:{experimentSeed:baseSeed,environmentSeed:1,policySeed:2,assumptions:{independentGames:independent,fixedSampleSize:true,analysis:'EXPLORATORY' as const}}}:{}),
+    };
+    await onStartCampaign(payload);
   };
 
   return (
     <form onSubmit={handleLaunch} className="space-y-6">
+      <fieldset className="p-4 border rounded"><legend>Protocole expérimental</legend>
+      <select aria-label="Protocole" value={protocol} onChange={e=>{const next=e.target.value as typeof protocol;setProtocol(next);if(next==='SCIENTIFIC_V1')setSelectedTableIds(prev=>{const ids=prev.filter(id=>scientificIds.includes(id));return ids.length?ids:['TABLE_BLIND'];});}}><option value="HISTORICAL_V33">HISTORICAL_V33 — référence historique</option><option value="SCIENTIFIC_V1">SCIENTIFIC_V1 — politiques pilotes sans révisions</option></select>
+      {protocol==='SCIENTIFIC_V1'&&<div><p role="note">{SCIENTIFIC_PILOT_NOTICE}</p><p>Le jeu de règles v3.3 est conservé. Les politiques scientifiques ont leurs propres versions : second jeton au siège suivant, tactique uniquement, sans révisions. COORD_NO_DICE et COORD_HYBRID sont indisponibles. Le contrôle privilégié reste heuristique. La graine de base identifie l’expérience ; flux environnement 1 et politiques 2, enregistrés dans le manifeste.</p><label><input type="checkbox" checked={independent} onChange={e=>setIndependent(e.target.checked)}/>Déclarer les parties indépendantes sous le modèle pseudo-aléatoire. Sans cette hypothèse, aucun intervalle n’est affiché.</label></div>}
+      </fieldset>
       {/* En-tête et Invariants Figés v3.3 */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
+        {protocol==='HISTORICAL_V33' && <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4 pb-3 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
               Configurateur de Campagne Monte-Carlo v3.3 (Invariants v3.2 Figés, Synergie Mise HS & 7 Bots Orthogonaux)
@@ -238,6 +250,7 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
           </div>
         </div>
 
+        }
         {/* Boutons de pré-configuration rapide */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
@@ -657,13 +670,13 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
       {/* SÉLECTION DES 7 PROFILS GRADUÉS DE BOTS & LANCEMENT */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
         <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-          3. Les 7 Profils Gradués Orthogonaux d'IA (Décomposition Shapley des 3 Sources d'Information I1, I2, I3)
+          {protocol==='SCIENTIFIC_V1' ? '3. Politiques scientifiques versionnées (révisions indisponibles)' : "3. Panel historique des sept profils — comparaisons descriptives"}
         </h3>
         <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-          Conservez les 7 tables activées pour isoler sur les mêmes graines les 5 Gains Décisionnels : Gain I2 Probabiliste, Gain I1 Solo, Gain I1 Équipe, Gain Coord 1-Passe et Gain de la Boucle de Révision 2.2.
+          {protocol==='SCIENTIFIC_V1' ? 'La première table sélectionnée sert de référence aux contrastes appariés. Aucun profil absent ne sera remplacé par un autre résultat.' : 'Panel historique : les différences entre politiques ne constituent pas des effets causaux isolés des informations I1/I2/I3.'}
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-          {DEFAULT_TABLE_CONFIGS.map((tc) => {
+          {DEFAULT_TABLE_CONFIGS.filter(tc=>protocol==='HISTORICAL_V33'||scientificIds.includes(tc.id)).map((tc) => {
             const checked = selectedTableIds.includes(tc.id);
             return (
               <div
@@ -676,10 +689,10 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
                 }`}
               >
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                  {tc.name}
+                  {protocol==='SCIENTIFIC_V1' ? tc.botProfiles[0]+' — politique SCI V1' : tc.name}
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                  {tc.description}
+                  {protocol==='SCIENTIFIC_V1' ? 'Politique pilote : pose tactique, soutien au siège suivant, sans révision. OMNISCIENT est un contrôle heuristique à information privilégiée.' : tc.description}
                 </p>
               </div>
             );

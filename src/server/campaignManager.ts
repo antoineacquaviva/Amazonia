@@ -1,3 +1,17 @@
+import {
+  normalizeProtocol,
+  protocolOf,
+  manifestDigest,
+  type ProtocolConfig,
+} from "../scientific/protocol";
+import {
+  summarizeScientific,
+  scientificVariant,
+  scientificSample,
+  type ScientificTable,
+  type ScientificVariant,
+} from "../scientific/reports";
+import type { ScientificGame, ScientificSample } from "../scientific/runner";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -72,7 +86,7 @@ function measureVmCpuPercent(): number {
 }
 
 interface Supervision {
-  version: 1;
+  version: 1 | 2;
   generation: string;
   reason: string;
   lastCheckpoint: string;
@@ -86,9 +100,13 @@ interface Supervision {
 }
 export type ManagedRecord = CampaignRecord & {
   orchestration?: Supervision;
+  scientificResults?: ScientificVariant[];
+  scientificPartial?: ScientificTable[];
+  protocol?: "HISTORICAL_V33" | "SCIENTIFIC_V1";
   partialResults?: { variantId: string; tableSummaries: TableConfigSummary[] };
 };
 interface State {
+  scientificManifestHash?: string;
   record: ManagedRecord;
   generation: string;
   seq: number;
@@ -98,6 +116,7 @@ interface State {
   batchSize: number;
   rngState?: number;
   partial: TableConfigSummary[];
+  scientificPartial?: ScientificTable[];
   traces: VariantEvaluationResult["sampleTraces"];
   violations: number;
   sums: Record<
@@ -174,6 +193,22 @@ export class CampaignManager {
         this.legacy.delete(row.id);
         if (row.deleted) continue;
         const s = JSON.parse(row.body) as State;
+        try {
+          const config = s.record.config as ProtocolConfig;
+          if (
+            protocolOf(config) === "SCIENTIFIC_V1" &&
+            (!config.provenance ||
+              s.record.orchestration?.version !== 2 ||
+              s.scientificManifestHash !== manifestDigest(config))
+          )
+            throw new Error("Scientific manifest/checkpoint schema mismatch");
+          normalizeProtocol(config);
+        } catch (error) {
+          s.record.status = "ERROR";
+          s.record.errorMessage = `Protocol checkpoint rejected: ${(error as Error).message}`;
+          s.record.orchestration!.reason = "PROTOCOL_MISMATCH";
+          s.record.orchestration!.lastError = s.record.errorMessage;
+        }
         if (
           s.record.status === "RUNNING" ||
           (s.record.status === "PAUSED" &&
@@ -224,50 +259,106 @@ export class CampaignManager {
   }
   listCampaigns() {
     return [
-      ...this.legacy.values(),
+      ...[...this.legacy.keys()].map((id) => this.getCampaign(id)!),
       ...[...this.states.keys()].map((id) => this.getCampaign(id)!),
     ].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
   getCampaign(id: string): ManagedRecord | undefined {
     validateCampaignId(id);
     const s = this.states.get(id);
-    if (!s) return clone(this.legacy.get(id));
+    if (!s) {
+      const old = clone(this.legacy.get(id)) as ManagedRecord | undefined;
+      if (old) old.protocol = protocolOf(old.config);
+      return old;
+    }
     const r = clone(s.record);
+    r.protocol = (r.config as ProtocolConfig).protocol ?? "HISTORICAL_V33";
     r.orchestration!.pendingBatches = Math.max(
       0,
       r.orchestration!.pendingBatches - r.orchestration!.runningBatches,
     );
-    r.variantResults = (
+    const entries = (
       this.store.db
         .prepare(
           "SELECT body FROM variants WHERE id=? AND generation=? ORDER BY idx",
         )
         .all(id, s.generation) as unknown as { body: string }[]
     ).map((x) => JSON.parse(x.body));
+    r.variantResults = entries.filter((x) => x.kind !== "SCIENTIFIC_V1");
+    r.scientificResults = entries.filter((x) => x.kind === "SCIENTIFIC_V1");
     if (
-      s.record.config.type !== "ORACLE_STRESS_TEST" &&
-      s.v < s.record.progress.totalVariants
+      (s.record.config as ProtocolConfig).protocol === "SCIENTIFIC_V1" &&
+      s.record.orchestration?.reason !== "PROTOCOL_MISMATCH"
     ) {
-      const tables = clone(s.partial);
+      const partial = clone(s.scientificPartial ?? []);
       const rows = this.store.db
         .prepare(
           "SELECT result FROM batches WHERE id=? AND generation=? AND result IS NOT NULL ORDER BY seq",
         )
         .all(id, s.generation) as unknown as { result: string }[];
       if (rows.length)
-        tables.push(
-          summarizeTableGames(
+        partial.push(
+          summarizeScientific(
             tablesFor(s.record.config)[s.t],
             rows.flatMap((x) => JSON.parse(x.result)),
+            s.record.config as ProtocolConfig,
+            false,
           ),
         );
-      if (tables.length)
-        r.partialResults = {
-          variantId: expandParameterSweep(s.record.config.sweep)[s.v].variantId,
-          tableSummaries: tables,
-        };
+      for (const table of partial)
+        for (const metric of [table.survival, table.treesLost, table.defeat]) {
+          metric.ci95 = null;
+          metric.reason = "FIXED_SAMPLE_NOT_COMPLETE";
+        }
+      r.scientificPartial = partial;
+    } else if (
+      ((s.record.config as ProtocolConfig).protocol ?? "HISTORICAL_V33") ===
+      "HISTORICAL_V33"
+    ) {
+      if (
+        s.record.config.type !== "ORACLE_STRESS_TEST" &&
+        s.v < s.record.progress.totalVariants
+      ) {
+        const tables = clone(s.partial);
+        const rows = this.store.db
+          .prepare(
+            "SELECT result FROM batches WHERE id=? AND generation=? AND result IS NOT NULL ORDER BY seq",
+          )
+          .all(id, s.generation) as unknown as { result: string }[];
+        if (rows.length)
+          tables.push(
+            summarizeTableGames(
+              tablesFor(s.record.config)[s.t],
+              rows.flatMap((x) => JSON.parse(x.result)),
+            ),
+          );
+        if (tables.length)
+          r.partialResults = {
+            variantId: expandParameterSweep(s.record.config.sweep)[s.v]
+              .variantId,
+            tableSummaries: tables,
+          };
+      }
     }
     return r;
+  }
+  getScientificAudit(id: string, variant: number, table: string) {
+    validateCampaignId(id);
+    const s = this.states.get(id);
+    if (!s) return undefined;
+    if (
+      !Number.isInteger(variant) ||
+      variant < 0 ||
+      variant > 20000 ||
+      table.length > 128
+    )
+      throw new Error("Invalid audit selector");
+    const row = this.store.db
+      .prepare(
+        "SELECT body FROM scientific_audits WHERE id=? AND generation=? AND variant=? AND table_id=?",
+      )
+      .get(id, s.generation, variant, table) as { body: string } | undefined;
+    return row ? JSON.parse(row.body) : undefined;
   }
   private capacity() {
     if (this.loops.size >= this.maxCampaigns)
@@ -276,6 +367,7 @@ export class CampaignManager {
   startCampaign(config: CampaignConfig) {
     if (this.closed) throw new Error("Gestionnaire fermé");
     validateCampaignConfig(config);
+    config = normalizeProtocol(config);
     this.capacity();
     if (this.states.has(config.id) || this.legacy.has(config.id))
       throw new Error("Identifiant déjà utilisé");
@@ -315,7 +407,7 @@ export class CampaignManager {
         },
         variantResults: [],
         orchestration: {
-          version: 1,
+          version: protocolOf(config) === "SCIENTIFIC_V1" ? 2 : 1,
           generation,
           reason: "RUNNING",
           lastCheckpoint: now,
@@ -361,6 +453,8 @@ export class CampaignManager {
         >["scoreDistributionByBotLevel"],
         capturedExtremeLogs: [],
       };
+    if (protocolOf(config) === "SCIENTIFIC_V1")
+      s.scientificManifestHash = manifestDigest(config);
     this.store.transaction(() => this.persist(s));
     this.states.set(s.record.id, s);
     this.launch(s);
@@ -384,6 +478,15 @@ export class CampaignManager {
       !this.loops.has(old.generation)
     )
       this.capacity();
+    if (status === "RUNNING") {
+      if (
+        old.scientificManifestHash &&
+        old.scientificManifestHash !==
+          manifestDigest(old.record.config as ProtocolConfig)
+      )
+        throw new Error("Scientific manifest mismatch");
+      normalizeProtocol(old.record.config);
+    }
     const s = clone(old);
     s.record.status = status;
     if (status === "RUNNING") delete s.record.errorMessage;
@@ -472,6 +575,7 @@ export class CampaignManager {
         type: "RUN_EVAL_BATCH",
         params: v.params,
         tableId: t.id,
+        experiment: s.record.config as ProtocolConfig,
         botProfiles: t.botProfiles,
         jobs: Array.from({ length: end - s.g }, (_, i) => ({
           seed: c.baseSeed + s.g + i + 1,
@@ -531,7 +635,7 @@ export class CampaignManager {
         s = this.current(id, generation);
         if (!s || this.closed) return;
         const next = clone(s);
-        let variant: VariantEvaluationResult | undefined;
+        let variant: VariantEvaluationResult | ScientificVariant | undefined;
         let result: SingleGameResult[] | undefined;
         if (request.type === "RUN_EVAL_BATCH") {
           if (
@@ -552,7 +656,16 @@ export class CampaignManager {
               .concat(result)
               .sort((a, b) => a.seed - b.seed);
             const table = tablesFor(next.record.config)[next.t];
-            next.partial.push(summarizeTableGames(table, games));
+            if (protocolOf(next.record.config) === "SCIENTIFIC_V1") {
+              (next.scientificPartial ??= []).push(
+                summarizeScientific(
+                  table,
+                  games as ScientificGame[],
+                  next.record.config as ProtocolConfig,
+                  true,
+                ),
+              );
+            } else next.partial.push(summarizeTableGames(table, games));
             for (const g of games) {
               next.violations += g.violations.length;
               if (g.textualJournal && next.traces.length < 6)
@@ -572,14 +685,43 @@ export class CampaignManager {
               const spec = expandParameterSweep(next.record.config.sweep)[
                 next.v
               ];
-              variant = {
-                ...spec,
-                tableSummaries: next.partial,
-                criteria: evaluateFourCriteria(spec.params, next.partial),
-                invariantViolationsCount: next.violations,
-                sampleTraces: next.traces,
-              };
+              variant =
+                protocolOf(next.record.config) === "SCIENTIFIC_V1"
+                  ? scientificVariant(
+                      spec,
+                      next.scientificPartial ?? [],
+                      next.record.config as ProtocolConfig,
+                      (tableId) => {
+                        const saved = (
+                          this.store.db
+                            .prepare(
+                              "SELECT body FROM scientific_samples WHERE id=? AND generation=? AND variant=? AND table_id=? ORDER BY unit",
+                            )
+                            .all(
+                              id,
+                              generation,
+                              next.v,
+                              tableId,
+                            ) as unknown as { body: string }[]
+                        ).map((x) => JSON.parse(x.body));
+                        const fresh =
+                          tableId === table.id
+                            ? result!.map((g) =>
+                                scientificSample(g as ScientificGame),
+                              )
+                            : [];
+                        return [...saved, ...fresh];
+                      },
+                    )
+                  : {
+                      ...spec,
+                      tableSummaries: next.partial,
+                      criteria: evaluateFourCriteria(spec.params, next.partial),
+                      invariantViolationsCount: next.violations,
+                      sampleTraces: next.traces,
+                    };
               next.partial = [];
+              next.scientificPartial = [];
               next.traces = [];
               next.violations = 0;
               next.v++;
@@ -643,6 +785,35 @@ export class CampaignManager {
               generation,
               s!.seq,
             );
+          if (
+            request.type === "RUN_EVAL_BATCH" &&
+            protocolOf(next.record.config) === "SCIENTIFIC_V1"
+          ) {
+            const stmt = this.store.db.prepare(
+              "INSERT INTO scientific_samples VALUES(?,?,?,?,?,?)",
+            );
+            for (const game of result!) {
+              const sample = scientificSample(game as ScientificGame);
+              if ((game as ScientificGame).scientific.observations)
+                this.store.db
+                  .prepare("INSERT INTO scientific_audits VALUES(?,?,?,?,?)")
+                  .run(
+                    id,
+                    generation,
+                    s!.v,
+                    request.tableId,
+                    JSON.stringify((game as ScientificGame).scientific),
+                  );
+              stmt.run(
+                id,
+                generation,
+                s!.v,
+                request.tableId,
+                sample.unit,
+                JSON.stringify(sample),
+              );
+            }
+          }
           if (request.type === "RUN_EVAL_BATCH" && next.g === 0)
             this.store.db
               .prepare(

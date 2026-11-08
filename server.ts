@@ -1,3 +1,5 @@
+import { runScientificGame } from "./src/scientific/runner";
+import type { ProtocolConfig } from "./src/scientific/protocol";
 import { pathToFileURL } from "node:url";
 import { validateCampaignId } from "./src/server/campaignStore";
 import express from "express";
@@ -66,12 +68,29 @@ export async function createApp(
     res.json(record);
   });
 
+  apiRouter.get(
+    "/campaigns/:id/scientific-audits/:variant/:table",
+    (req, res) => {
+      const audit = campaignManager.getScientificAudit(
+        req.params.id,
+        Number(req.params.variant),
+        req.params.table,
+      );
+      if (!audit) {
+        res.status(404).json({ error: "Audit indisponible" });
+        return;
+      }
+      res.json(audit);
+    },
+  );
   apiRouter.post("/campaigns", (req, res) => {
     try {
-      const body = req.body as Partial<CampaignConfig>;
+      const body = req.body as Partial<ProtocolConfig>;
       const id =
         body.id || `camp_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-      const config: CampaignConfig = {
+      const config: ProtocolConfig = {
+        protocol: body.protocol,
+        science: body.science,
         id,
         name:
           body.name || `Campagne du ${new Date().toLocaleDateString("fr-FR")}`,
@@ -176,13 +195,22 @@ export async function createApp(
         "COORD_HYBRID",
       ];
 
-      const game = runSingleGame(
-        params,
-        botProfiles,
-        seed,
-        "custom_inspection",
-        true,
-      );
+      if (
+        req.body.protocol !== undefined &&
+        !["HISTORICAL_V33", "SCIENTIFIC_V1"].includes(req.body.protocol)
+      )
+        throw new Error("Unknown protocol");
+      const game =
+        req.body.protocol === "SCIENTIFIC_V1"
+          ? runScientificGame(
+              params,
+              botProfiles,
+              seed,
+              "custom_inspection",
+              true,
+              req.body.science,
+            )
+          : runSingleGame(params, botProfiles, seed, "custom_inspection", true);
       res.json(game);
     } catch (err: any) {
       res.status(400).json({

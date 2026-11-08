@@ -1,3 +1,4 @@
+import {ScientificResultsView} from './components/ScientificResultsView';
 import type {ManagedRecord} from './server/campaignManager';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -395,7 +396,9 @@ export default function App() {
               </aside>
             );
           })()}
-        {activeTab === 'dashboard' && (
+        {selectedCampaign && (((selectedCampaign.config as {protocol?:string}).protocol??'HISTORICAL_V33')==='HISTORICAL_V33') && <p className="p-3 border rounded">HISTORICAL_V33 : référence historique ; RNG partagé, gains descriptifs et contrôle omniscient non certifié optimal.</p>}
+        {activeTab === 'dashboard' && (selectedCampaign && (selectedCampaign.config as {protocol?:string}).protocol==='SCIENTIFIC_V1' ? <ScientificResultsView campaign={selectedCampaign as ManagedRecord} campaigns={campaigns} onSelect={setSelectedCampaignId} onControl={handleControlCampaign} onDelete={handleDeleteCampaign}/> : (
+
           <DashboardView
             campaigns={campaigns}
             activeCampaign={selectedCampaign}
@@ -404,7 +407,7 @@ export default function App() {
             onDeleteCampaign={handleDeleteCampaign}
             onNavigateToBuilder={() => setActiveTab('builder')}
           />
-        )}
+        ))}
 
         {activeTab === 'builder' && (
           <EvaluationBuilderView
