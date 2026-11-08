@@ -66,7 +66,7 @@ function getCandidatePrefixes(): string[] {
   if (!candidates.includes("")) {
     candidates.push("");
   }
-  return Array.from(new Set(candidates));
+  return [candidates[0]]; // Never probe another tool or the portal root after a refusal.
 }
 
 export async function fetchServerHealth(
@@ -101,7 +101,9 @@ export async function fetchServerHealth(
           serverHeader,
           contentType,
           reason:
-            serverHeader && serverHeader.toLowerCase().includes("python")
+            [401,403,503].includes(res.status)
+              ? `Accès au serveur refusé ou autorisation non configurée (HTTP ${res.status}). Contactez l’administrateur.`
+              : serverHeader && serverHeader.toLowerCase().includes("python")
               ? `Le serveur web (${serverHeader}) sert uniquement des fichiers statiques (HTML/JS) au lieu d'exécuter le backend Node.js (tsx server.ts).`
               : `Réponse HTTP ${res.status} (${contentType || "non-JSON"}) sur ${url}. Le backend Node.js/Express n'est pas routé sur cette URL.`,
         };

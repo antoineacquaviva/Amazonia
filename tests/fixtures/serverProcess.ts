@@ -8,7 +8,7 @@ const manager = new CampaignManager({
   batchSize: 2,
   pool: { workers: 1, queue: 2 },
 });
-const { app } = await createApp({ manager, web: false });
+const { app } = await createApp({ manager, web: false, authorize: () => true });
 if (process.argv[3] === "web") app.use(express.static("dist"));
 const server = app.listen(0, "127.0.0.1", () =>
   console.log(

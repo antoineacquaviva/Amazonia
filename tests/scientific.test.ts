@@ -610,7 +610,7 @@ test("HTTP carries scientific protocol and returns scientific results instead of
   const { createApp } = await import("../server");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amazonia-sci-http-"));
   const m = new CampaignManager({ campaignsDir: dir, batchSize: 5 });
-  const { app } = await createApp({ manager: m, web: false });
+  const { app } = await createApp({ manager: m, web: false, authorize: () => true });
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api`;

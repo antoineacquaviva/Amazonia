@@ -278,7 +278,7 @@ test("second manager cannot concurrently own the same directory", () =>
 test("HTTP disconnect, two independent clients and reconnect never own or duplicate the calculation", () =>
   isolated(async (_dir, open) => {
     const m = open();
-    const { app } = await createApp({ manager: m, web: false });
+    const { app } = await createApp({ manager: m, web: false, authorize: () => true });
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const address = server.address() as { port: number },
