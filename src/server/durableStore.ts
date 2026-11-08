@@ -22,6 +22,8 @@ export class DurableStore {
         CREATE TABLE IF NOT EXISTS owner(singleton INTEGER PRIMARY KEY CHECK(singleton=1), pid INTEGER, token TEXT);
         CREATE TABLE IF NOT EXISTS campaigns(id TEXT PRIMARY KEY, generation TEXT NOT NULL, body TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS batches(id TEXT, generation TEXT, seq INTEGER, state TEXT, request TEXT, result TEXT, error TEXT, attempts INTEGER DEFAULT 0, PRIMARY KEY(id,generation,seq));
+        CREATE TABLE IF NOT EXISTS scientific_audits(id TEXT,generation TEXT,variant INTEGER,table_id TEXT,body TEXT,PRIMARY KEY(id,generation,variant,table_id));
+        CREATE TABLE IF NOT EXISTS scientific_samples(id TEXT,generation TEXT,variant INTEGER,table_id TEXT,unit TEXT,body TEXT,PRIMARY KEY(id,generation,variant,table_id,unit));
         CREATE TABLE IF NOT EXISTS variants(id TEXT,generation TEXT,idx INTEGER,body TEXT,PRIMARY KEY(id,generation,idx));`);
       this.transaction(() => {
         const row = this.db

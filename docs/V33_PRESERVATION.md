@@ -41,3 +41,7 @@ Pas de changement de dépendances ; l'absence de lockfile reste une limite de re
 ## Évolution 1B.2
 
 La nouvelle orchestration et ses incompatibilités sont décrites dans [LONG_CAMPAIGNS.md](LONG_CAMPAIGNS.md). Les garanties JSON ci-dessus décrivent la couche historique conservée ; les nouvelles campagnes utilisent désormais des checkpoints SQLite transactionnels. Les références scientifiques restent inchangées.
+
+## Évolution 1B.3
+
+Le point d’adaptation optionnel du moteur et la séparation explicite des protocoles sont documentés dans [SCIENTIFIC_V1.md](SCIENTIFIC_V1.md). Le chemin historique par défaut et ses 21 références sont conservés ; les nouvelles politiques scientifiques ne remplacent pas les bots historiques.

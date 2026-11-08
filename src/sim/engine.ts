@@ -1,3 +1,4 @@
+import type { SimulationRuntime } from './runtime';
 import {
   BotProfileId,
   CombatCellLog,
@@ -76,9 +77,10 @@ export function runSingleGame(
   botProfilesInput: BotProfileId[],
   seed: number,
   tableConfigId: string = 'CUSTOM',
-  recordTraces: boolean = false
+  recordTraces: boolean = false,
+  runtime?: SimulationRuntime
 ): SingleGameResult {
-  const rng = new SeededRNG(seed);
+  const rng = runtime?.environment ?? new SeededRNG(seed);
   const N = params.numPlayers;
   const X = params.numTurns;
   const a = params.initialTreesPerCell ?? 2;
@@ -239,7 +241,7 @@ export function runSingleGame(
     // =========================================================================
     // PHASE 2 : MOBILISATION DES DÉFENSEURS (2 JETONS PAR JOUEUR)
     // =========================================================================
-    const phase2Res = executePhase2BotsDetailed(
+    const phase2Res = runtime ? runtime.phase2(params, players, draws, botProfiles) : executePhase2BotsDetailed(
       params,
       players,
       draws,
