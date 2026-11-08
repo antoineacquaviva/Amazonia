@@ -1,3 +1,4 @@
+import { SCIENTIFIC_PILOT_NOTICE } from "./scientific/pilotNotice";
 import { generateCampaignMarkdownReport } from "./sim/evaluator";
 import type { ManagedRecord } from "./server/campaignManager";
 export function campaignReport(record: ManagedRecord) {
@@ -9,6 +10,7 @@ export function campaignReport(record: ManagedRecord) {
     const reports = record.scientificResults ?? [];
     const lines = [
       `# Amazonia — SCIENTIFIC_V1`,
+      SCIENTIFIC_PILOT_NOTICE,
       `Statut : ${record.status}. ${record.status !== "COMPLETED" || record.orchestration?.partial ? "BILAN PARTIEL." : ""}`,
       `Configuration et manifeste :`,
       "```json",
@@ -38,7 +40,15 @@ export function campaignReport(record: ManagedRecord) {
           `- Survie ${c.left} − ${c.right} : ${estimate(c.estimate)} ; apparié=${c.estimate.paired}`,
         );
       lines.push(
-        `Profils sans mesure : ${v.unavailableProfiles.join(", ")}`,
+        ...(v.selectedProfiles && v.unselectedProfiles
+          ? [
+              `Politiques implémentées et sélectionnées : ${v.selectedProfiles.join(", ") || "aucune"}`,
+              `Politiques implémentées mais non sélectionnées : ${v.unselectedProfiles.join(", ") || "aucune"}`,
+              `Politiques scientifiques indisponibles : ${v.unavailableProfiles.join(", ") || "aucune"}`,
+            ]
+          : [
+              "Rapport antérieur : classification des politiques non renseignée.",
+            ]),
         `Méthodes : Hoeffding borné et Wilson ; intervalles marginaux non ajustés.`,
         ...v.limitations,
       );

@@ -1,5 +1,6 @@
+import { SCIENTIFIC_PILOT_NOTICE } from "./pilotNotice";
 import { BOTS } from "../server/campaignPlan";
-import type { SimulationConfig, TableConfig } from "../sim/types";
+import type { BotProfileId, SimulationConfig, TableConfig } from "../sim/types";
 import {
   meanEstimate,
   proportionEstimate,
@@ -27,6 +28,7 @@ export const METRICS = {
   defeat: { formula: "survival < 0.45", unit: "frequency", favorable: "LOWER" },
 } as const;
 export interface ScientificTable {
+  pilotNotice: string;
   tableId: string;
   name: string;
   team: string[];
@@ -56,10 +58,28 @@ export interface ScientificVariant {
     metric: "survival";
     estimate: ReturnType<typeof pairedDifference>;
   }[];
-  unavailableProfiles: string[];
+  selectedProfiles: BotProfileId[];
+  unselectedProfiles: BotProfileId[];
+  unavailableProfiles: BotProfileId[];
+  pilotNotice: string;
   assumptions: Assumptions;
   dictionary: typeof METRICS;
   limitations: string[];
+}
+/** A policy can be absent from a plan while remaining implemented. */
+export function classifyProfiles(
+  tables: readonly Pick<ScientificTable, "team">[],
+) {
+  const selected = new Set(tables.flatMap((t) => t.team));
+  return {
+    selectedProfiles: BOTS.filter(
+      (p) => p in POLICY_VERSIONS && selected.has(p),
+    ),
+    unselectedProfiles: BOTS.filter(
+      (p) => p in POLICY_VERSIONS && !selected.has(p),
+    ),
+    unavailableProfiles: BOTS.filter((p) => !(p in POLICY_VERSIONS)),
+  };
 }
 export function scientificSample(game: ScientificGame): ScientificSample {
   const {
@@ -129,6 +149,7 @@ export function summarizeScientific(
   const options = c.science!,
     bounds = games[0]?.initialTotalTreesAllocated ?? 1;
   return {
+    pilotNotice: SCIENTIFIC_PILOT_NOTICE,
     tableId: table.id,
     name: expected.every((p) => p === "OMNISCIENT")
       ? "OMNISCIENT — contrôle heuristique privilégié"
@@ -201,9 +222,8 @@ export function scientificVariant(
         c.science!.assumptions,
       ),
     })),
-    unavailableProfiles: BOTS.filter(
-      (p) => !tables.some((t) => t.team.includes(p)),
-    ),
+    ...classifyProfiles(tables),
+    pilotNotice: SCIENTIFIC_PILOT_NOTICE,
     assumptions: c.science!.assumptions,
     dictionary: METRICS,
     limitations: [
@@ -211,7 +231,7 @@ export function scientificVariant(
       "No Shapley decomposition, certified optimum or adaptive stopping.",
       "95% intervals are marginal and unadjusted for multiplicity; no family-wise guarantee.",
       "IID and fixed-N assumptions are declarations, not empirical proofs.",
-      "Baseline policies route the second token to the next seat, use tactical tokens only, and never revise.",
+      SCIENTIFIC_PILOT_NOTICE,
       "COORD_NO_DICE and COORD_HYBRID unavailable until revision rules are validated.",
     ],
   };

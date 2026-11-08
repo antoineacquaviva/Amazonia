@@ -1,3 +1,4 @@
+import {SCIENTIFIC_PILOT_NOTICE} from '../scientific/pilotNotice';
 import type {ProtocolConfig} from '../scientific/protocol';
 import React, { useMemo, useState } from 'react';
 import {
@@ -223,7 +224,7 @@ export const EvaluationBuilderView: React.FC<EvaluationBuilderViewProps> = ({
     <form onSubmit={handleLaunch} className="space-y-6">
       <fieldset className="p-4 border rounded"><legend>Protocole expérimental</legend>
       <select aria-label="Protocole" value={protocol} onChange={e=>{const next=e.target.value as typeof protocol;setProtocol(next);if(next==='SCIENTIFIC_V1')setSelectedTableIds(prev=>{const ids=prev.filter(id=>scientificIds.includes(id));return ids.length?ids:['TABLE_BLIND'];});}}><option value="HISTORICAL_V33">HISTORICAL_V33 — référence historique</option><option value="SCIENTIFIC_V1">SCIENTIFIC_V1 — politiques pilotes sans révisions</option></select>
-      {protocol==='SCIENTIFIC_V1'&&<div><p>Le jeu de règles v3.3 est conservé. Les politiques scientifiques ont leurs propres versions : second jeton au siège suivant, tactique uniquement, sans révisions. COORD_NO_DICE et COORD_HYBRID sont indisponibles. Le contrôle privilégié reste heuristique. La graine de base identifie l’expérience ; flux environnement 1 et politiques 2, enregistrés dans le manifeste.</p><label><input type="checkbox" checked={independent} onChange={e=>setIndependent(e.target.checked)}/>Déclarer les parties indépendantes sous le modèle pseudo-aléatoire. Sans cette hypothèse, aucun intervalle n’est affiché.</label></div>}
+      {protocol==='SCIENTIFIC_V1'&&<div><p role="note">{SCIENTIFIC_PILOT_NOTICE}</p><p>Le jeu de règles v3.3 est conservé. Les politiques scientifiques ont leurs propres versions : second jeton au siège suivant, tactique uniquement, sans révisions. COORD_NO_DICE et COORD_HYBRID sont indisponibles. Le contrôle privilégié reste heuristique. La graine de base identifie l’expérience ; flux environnement 1 et politiques 2, enregistrés dans le manifeste.</p><label><input type="checkbox" checked={independent} onChange={e=>setIndependent(e.target.checked)}/>Déclarer les parties indépendantes sous le modèle pseudo-aléatoire. Sans cette hypothèse, aucun intervalle n’est affiché.</label></div>}
       </fieldset>
       {/* En-tête et Invariants Figés v3.3 */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">

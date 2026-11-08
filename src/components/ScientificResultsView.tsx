@@ -1,3 +1,4 @@
+import { SCIENTIFIC_PILOT_NOTICE } from "../scientific/pilotNotice";
 import React from "react";
 import type { CampaignRecord } from "../sim/types";
 import type { ManagedRecord } from "../server/campaignManager";
@@ -26,6 +27,7 @@ export function ScientificResultsView({
       className="p-4 border rounded space-y-4"
     >
       <h2>SCIENTIFIC_V1 — comparaisons descriptives de politiques</h2>
+      <p role="note">{SCIENTIFIC_PILOT_NOTICE}</p>
       <p>
         Politiques pilotes à deux poses, sans révision. Les intervalles sont
         marginaux, non ajustés pour comparaisons multiples. Le contrôle
@@ -107,9 +109,26 @@ export function ScientificResultsView({
               appariement vérifié : {String(c.estimate.paired)}
             </p>
           ))}
-          <p>
-            Profils sans mesure : {v.unavailableProfiles.join(", ") || "aucun"}
-          </p>
+          {v.selectedProfiles && v.unselectedProfiles ? (
+            <div>
+              <p>
+                Politiques implémentées et sélectionnées :{" "}
+                {v.selectedProfiles.join(", ") || "aucune"}
+              </p>
+              <p>
+                Politiques implémentées mais non sélectionnées :{" "}
+                {v.unselectedProfiles.join(", ") || "aucune"}
+              </p>
+              <p>
+                Politiques scientifiques indisponibles :{" "}
+                {v.unavailableProfiles.join(", ") || "aucune"}
+              </p>
+            </div>
+          ) : (
+            <p>
+              Rapport antérieur : classification des politiques non renseignée.
+            </p>
+          )}
         </article>
       ))}
       {!!campaign.scientificPartial?.length && (

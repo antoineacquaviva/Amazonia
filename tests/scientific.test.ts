@@ -1,4 +1,8 @@
-import { summarizeScientific } from "../src/scientific/reports";
+import { SCIENTIFIC_PILOT_NOTICE } from "../src/scientific/pilotNotice";
+import {
+  classifyProfiles,
+  summarizeScientific,
+} from "../src/scientific/reports";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -409,6 +413,12 @@ test("scientific campaigns survive checkpoints exactly; samples and protocol rem
     m.pauseCampaign("scientific");
     await drain(m);
     assert.equal(m.getCampaign("scientific")!.progress.completedGames, 2);
+    const partial = m.getCampaign("scientific")!;
+    assert.equal(
+      partial.scientificPartial![0].pilotNotice,
+      SCIENTIFIC_PILOT_NOTICE,
+    );
+    assert(campaignReport(partial).includes(SCIENTIFIC_PILOT_NOTICE));
     await m.close();
     m = new CampaignManager({
       campaignsDir: path.join(root, "resumed"),
@@ -432,9 +442,49 @@ test("scientific campaigns survive checkpoints exactly; samples and protocol rem
     assert.equal(report.tableSummaries.length, 2);
     assert.equal(report.comparisons[0].estimate.paired, true);
     assert.equal(report.comparisons[0].estimate.n, 5);
-    assert(report.unavailableProfiles.includes("OMNISCIENT"));
+    assert(report.unselectedProfiles.includes("OMNISCIENT"));
+    assert(!report.unavailableProfiles.includes("OMNISCIENT"));
     assert(report.tableSummaries[0].survival.ci95);
     assert(campaignReport(a).includes("SCIENTIFIC_V1"));
+    assert.deepEqual(report.selectedProfiles, ["BLIND", "PROB_ONLY"]);
+    assert.deepEqual(report.unselectedProfiles, [
+      "SOLO_INFORMED",
+      "COORD_ONE_SHOT",
+      "OMNISCIENT",
+    ]);
+    assert.deepEqual(report.unavailableProfiles, [
+      "COORD_NO_DICE",
+      "COORD_HYBRID",
+    ]);
+    const json = JSON.parse(JSON.stringify(a));
+    assert.equal(
+      json.scientificResults[0].pilotNotice,
+      SCIENTIFIC_PILOT_NOTICE,
+    );
+    assert(
+      json.scientificResults[0].tableSummaries.every(
+        (t: { pilotNotice: string }) =>
+          t.pilotNotice === SCIENTIFIC_PILOT_NOTICE,
+      ),
+    );
+    const md = campaignReport(a);
+    assert(md.includes(SCIENTIFIC_PILOT_NOTICE));
+    assert(
+      md.includes(
+        "Politiques implémentées et sélectionnées : BLIND, PROB_ONLY",
+      ),
+    );
+    assert(
+      md.includes(
+        "Politiques implémentées mais non sélectionnées : SOLO_INFORMED, COORD_ONE_SHOT, OMNISCIENT",
+      ),
+    );
+    assert(
+      md.includes(
+        "Politiques scientifiques indisponibles : COORD_NO_DICE, COORD_HYBRID",
+      ),
+    );
+
     assert(!campaignReport(a).includes("Note Design"));
     const db = new DatabaseSync(
       path.join(root, "resumed", "orchestration.sqlite"),
@@ -670,4 +720,33 @@ test("scientific fixed-N rejects time-limited stopping", () => {
     () => normalizeProtocol({ ...config(), targetDurationSeconds: 1 }),
     /fixed-N/,
   );
+});
+
+test("implemented selected policies are unique, including mixed teams", () => {
+  const status = classifyProfiles([
+    { team: ["BLIND", "PROB_ONLY", "BLIND"] },
+    { team: ["BLIND"] },
+  ]);
+  assert.deepEqual(status.selectedProfiles, ["BLIND", "PROB_ONLY"]);
+});
+test("implemented policies absent from the plan are unselected, not unavailable", () => {
+  const status = classifyProfiles([{ team: ["BLIND"] }]);
+  assert.deepEqual(status.unselectedProfiles, [
+    "PROB_ONLY",
+    "SOLO_INFORMED",
+    "COORD_ONE_SHOT",
+    "OMNISCIENT",
+  ]);
+  assert(!status.unavailableProfiles.includes("OMNISCIENT"));
+});
+test("unavailable scientific policies remain distinct when every implemented policy is selected", () => {
+  const status = classifyProfiles(
+    Object.keys(POLICY_VERSIONS).map((profile) => ({ team: [profile] })),
+  );
+  assert.equal(status.selectedProfiles.length, 5);
+  assert.deepEqual(status.unselectedProfiles, []);
+  assert.deepEqual(status.unavailableProfiles, [
+    "COORD_NO_DICE",
+    "COORD_HYBRID",
+  ]);
 });

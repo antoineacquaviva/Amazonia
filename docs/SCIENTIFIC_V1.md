@@ -63,7 +63,7 @@ Les identifiants historiques servent de familles ; leurs **versions scientifique
 | COORD_ONE_SHOT | SCI_VISIBLE_ONE_PASS_V1 | Même base, plus bonus heuristique sur des jetons tactiques réellement visibles. |
 | OMNISCIENT | SCI_PRIVILEGED_HEURISTIC_V1 | Compte les tirages courants exacts ; reste une allocation heuristique limitée. |
 
-Tous ces pilotes choisissent des poses tactiques ; leur seconde pose cible le siège suivant. Ce sont des restrictions explicites de politique, pas de nouvelles règles du jeu. Elles rendent les poses simultanées légales sans introduire une résolution cachée des collisions. L'exploitation stratégique complète de la furtivité, les révisions et la mémoire humaine sont reportées. Aucun plafond de performance n'est démontré ; le contrôle privilégié peut faire moins bien qu'une autre politique.
+Tous ces pilotes choisissent des poses tactiques ; leur seconde pose cible le siège suivant. Ce sont des restrictions explicites de politique, pas de nouvelles règles du jeu. Elles rendent les poses simultanées légales sans introduire une résolution cachée des collisions. L'exploitation stratégique complète de la furtivité, les révisions et la mémoire humaine sont reportées. Ces politiques sont des pilotes de validation scientifique : leurs performances ne permettent pas encore de conclure à la meilleure variante de règles d’Amazonia. Cet avertissement est commun au configurateur, à la vue des résultats, au Markdown et aux rapports JSON, y compris les tables partielles. Aucun plafond de performance n'est démontré ; le contrôle privilégié peut faire moins bien qu'une autre politique.
 
 Les équipes homogènes et mixtes entre politiques ordinaires sont explicites ; une liste courte est répétée cycliquement jusqu'à N, et l'équipe résultante ainsi que ses versions sont enregistrées. Les rotations de sièges sont testées, sans supposer leur équivalence : la matrice de ciblage est asymétrique. Une table mêlant OMNISCIENT et politiques ordinaires est refusée tant qu'une convention n'est pas validée. Des tables entièrement privilégiées restent comparables comme contrôles séparés.
 
@@ -80,7 +80,7 @@ La population est celle des parties simulées à règles, paramètres et équipe
 | Défaite | Indicateur `survie < 0,45`, fréquence | Plus bas |
 | Contraste apparié | Moyenne de `survie(gauche, unité) − survie(référence, unité)`, ratio | Positif favorable à gauche |
 
-La première table réellement sélectionnée est la référence ; pas de remplacement d'un profil absent. Les profils sans mesure sont listés, y compris les deux politiques scientifiques indisponibles.
+La première table réellement sélectionnée est la référence ; pas de remplacement d'un profil absent. Les rapports distinguent `selectedProfiles` (politiques implémentées et sélectionnées), `unselectedProfiles` (implémentées mais non sélectionnées) et `unavailableProfiles` (non implémentées : COORD_NO_DICE et COORD_HYBRID). Une politique absente du plan, telle qu’OMNISCIENT, n’est pas pour autant indisponible.
 
 - Moyenne et moments : algorithme de Welford, écart-type d'échantillon avec dénominateur n−1.
 - Erreur standard : écart-type d'échantillon / √n ; indisponible pour n<2.
@@ -114,7 +114,7 @@ Une violation d'invariant du moteur empêche la validation du résultat scientif
 
 Les tests couvrent : références historiques complètes ; dés communs entre politiques et malgré consommation décisionnelle supplémentaire ; piste mélangée ; observations indiscernables malgré changements de secrets/métadonnées ; conséquences légitimes du plateau visible ; contrats mixtes et rotations ; contrôle privilégié ; moments connus, Wilson aux extrêmes, petits effectifs, données manquantes, différences appariées de variance nulle, refus des faux appariements ; reprise scientifique exacte, manifestes altérés, ancien checkpoint historique, API et audits durables.
 
-Les essais utilisent exclusivement des campagnes et des répertoires temporaires. `npm test`, `npm run lint`, `npm run build` sont les commandes de validation. Résultat final : 76 tests réussis, typage et compilation réussis. Un essai Chromium isolé vérifie le sélecteur explicite, l’absence des politiques de révision indisponibles, dix parties serveur, le contraste apparié avec IC95 et l’accès à un audit, sans erreur JavaScript.
+Les essais utilisent exclusivement des campagnes et des répertoires temporaires. `npm test`, `npm run lint`, `npm run build` sont les commandes de validation. Résultat final après revue : 79 tests réussis, typage et compilation réussis. Un essai Chromium isolé vérifie le sélecteur explicite, l’absence des politiques de révision indisponibles, dix parties serveur, le contraste apparié avec IC95 et l’accès à un audit, sans erreur JavaScript.
 
 Non démontrés : indépendance mathématique du pseudo-aléatoire, couverture empirique de tous les modèles de jeu, optimalité ou réalisme humain des pilotes, causalité I1/I2/I3, classement global corrigé, charge de production et comportement du portail Oracle. Aucun déploiement, nouvelle authentification ou changement du portail.
 
@@ -127,3 +127,5 @@ Les futures versions devront articuler moteur commun, descriptions de versions, 
 Avant fusion : valider les conventions de politiques pilotes, le caractère volontairement incomplet de la première tranche, les méthodes et hypothèses statistiques, la séparation des formats et les conditions de reprise. Attendre ensuite les règles validées des révisions pour la tranche suivante.
 
 Contrôles complémentaires : `git diff --check` réussi ; diff nul sur bots, RNG, évaluateur, i18n et fixtures historiques. Les empreintes SHA-256 des campagnes existantes sont inchangées ; aucune base scientifique n’a été créée dans leur répertoire.
+
+Ajustement de revue PR #4 : classification et avertissements uniquement ; aucune modification de la logique des checkpoints. Comme avant, les empreintes incluent `reports.ts` : leur changement conserve la règle de compatibilité stricte à la reprise, sans migration ni contournement automatique des checkpoints scientifiques antérieurs. Les archives dépourvues des nouveaux champs de classification sont signalées comme antérieures dans la présentation.
