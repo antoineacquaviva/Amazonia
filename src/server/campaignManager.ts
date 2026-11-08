@@ -1,3 +1,5 @@
+import { configuredCampaignsDir } from "./storageConfig";
+import type { singleInput } from "./singleValidation";
 import {
   normalizeProtocol,
   protocolOf,
@@ -150,6 +152,41 @@ export class CampaignManager {
   private options: Options;
   private maxCampaigns: number;
   private batchSize: number;
+  private singleBusy = false;
+  async simulateSingle(input: ReturnType<typeof singleInput>) {
+    // One transient request, no queue reservation ahead of campaigns. Same workers/time/memory budget.
+    if (
+      this.singleBusy ||
+      this.closed ||
+      this.pool.stats.queuedTasks > 0 ||
+      this.pool.stats.busyWorkers >= this.pool.stats.workersCount
+    )
+      throw new Error("Ressources occupées");
+    this.capacity();
+    this.singleBusy = true;
+    try {
+      const response = await this.pool.run(
+        {
+          taskId: -1,
+          type: "RUN_EVAL_BATCH",
+          params: input.params,
+          botProfiles: input.botProfiles,
+          tableId: "custom_inspection",
+          jobs: [{ seed: input.seed, recordTrace: true }],
+          experiment:
+            input.protocol === "SCIENTIFIC_V1"
+              ? ({ protocol: input.protocol, science: input.science } as any)
+              : undefined,
+        },
+        () => {},
+      );
+      if (response.type !== "RUN_EVAL_BATCH_RESULT")
+        throw new Error("Réponse incorrecte");
+      return response.results[0];
+    } finally {
+      this.singleBusy = false;
+    }
+  }
   constructor(options: Options = {}) {
     this.options = options;
     this.batchSize =
@@ -175,7 +212,7 @@ export class CampaignManager {
       this.maxCampaigns > config.workers + config.queue
     )
       throw new Error("Ressources invalides");
-    const root = options.campaignsDir ?? path.resolve("data/campaigns");
+    const root = options.campaignsDir ?? configuredCampaignsDir();
     this.store = new DurableStore(root);
     this.pool = new WorkerPool(config);
     try {
@@ -361,7 +398,7 @@ export class CampaignManager {
     return row ? JSON.parse(row.body) : undefined;
   }
   private capacity() {
-    if (this.loops.size >= this.maxCampaigns)
+    if (this.loops.size + Number(this.singleBusy) >= this.maxCampaigns)
       throw new Error("Limite de campagnes simultanées atteinte");
   }
   startCampaign(config: CampaignConfig) {

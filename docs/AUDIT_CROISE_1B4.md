@@ -2,6 +2,8 @@
 
 Audit statique du 8 novembre 2026. Proposition pour revue, pas validation de sécurité ni autorisation de déploiement.
 
+Mise à jour après réception du cadrage initial : les constats ci-dessous décrivent les révisions de référence avant corrections. Voir [SECURITY_DEPLOYMENT_1B4.md](SECURITY_DEPLOYMENT_1B4.md) pour les protections désormais implémentées et leurs validations.
+
 ## Périmètre et preuves reproductibles
 
 Les deux dépôts sont accessibles depuis Codex (`git ls-remote … HEAD` réussi). Révisions examinées :
@@ -13,7 +15,7 @@ Les références `P:Lx` désignent [server.ts du portail à cette révision](htt
 
 Aucune requête à la production, aucun lancement du serveur du portail, aucune commande sur Oracle. Les Caddyfile, unités systemd, registre `/srv/jeu/tools-registry.json`, pare-feu OCI/hôte, versions Node et éventuel fournisseur d'identité réellement installés n'ont pas été consultés. Les exemples du code ne prouvent pas la configuration active. Aucun mécanisme d'authentification n'est documenté dans la vue Documentation examinée ; cela ne permet pas d'exclure des protections externes.
 
-Le texte initial de 1B.4 et une PR correspondante ne sont pas disponibles dans ce chat ; aucune PR ouverte n'a été renvoyée par `gh pr list --state open`. Ce complément livre l'audit et les modifications proposées, sans choisir ni implémenter silencieusement un système d'identité. Les protections décrites ci-dessous restent à implémenter.
+Le cadrage initial a été fourni après la première livraison de cet audit dans la PR #5. Cette même PR est complétée par les protections indépendantes de l'identité et les outils de préparation ; aucune identité de portail n'est inventée. Les recommandations sur le portail restent toutes non appliquées.
 
 ## A. Cartographie des flux observés et cible
 
@@ -87,7 +89,7 @@ Pour les sessions navigateur : vérifier CSRF sur les mutations, notamment si de
 4. Manifest de déploiement backend Node 24 obligatoire ; readiness HTTP et SQLite, arrêt propre/checkpoint, aucune transformation de source automatique ; droits lecture seule du code et écriture seulement des données.
 5. Tests HTTP locaux avec faux fournisseur/signatures de test, variantes de chemins et faux en-têtes, matrice de rôles ; contrôle de ressources de simulation ; préserver les résultats scientifiques existants.
 
-La présente PR ne modifie que ce rapport. Ces corrections ne sont pas déclarées implémentées. Le périmètre initial manquant de 1B.4 doit être réconcilié avant implementation.
+État de cette liste après cadrage : garde refusant par défaut, bornage du calcul unitaire, configuration du stockage, sauvegarde/restauration et tests sont ajoutés dans la PR. Adaptateur d’identité, rôles effectifs et modifications du portail restent à valider et implémenter séparément. Voir le rapport de mission pour la frontière exacte.
 
 ### Portail (PR séparée, validation propriétaire obligatoire)
 
@@ -120,6 +122,6 @@ Aucune de ces modifications ne doit être appliquée au portail pendant cette mi
 
 ## Validation de ce livrable et limites
 
-Lecture statique uniquement. Commandes de contrôle : accès Git aux deux HEAD, lecture des fichiers aux révisions indiquées, `gh pr list --state open`, `git diff --check`, comparaison des arbres suivis avec origin/main et contrôle du périmètre du commit. Aucun test dynamique ni suite scientifique exécutée : ce changement est exclusivement documentaire et ne démarre aucune campagne. Le checkout initial et son `data/` préexistant restent intacts ; le travail est isolé dans un autre worktree.
+Pour la phase initiale documentaire, lecture statique uniquement. Commandes de contrôle : accès Git aux deux HEAD, lecture des fichiers aux révisions indiquées, `gh pr list --state open`, `git diff --check`, comparaison des arbres suivis avec origin/main et contrôle du périmètre du commit. Les validations de la phase applicative suivante sont consignées dans SECURITY_DEPLOYMENT_1B4.md ; les essais utilisent uniquement des répertoires temporaires. Le checkout initial et son `data/` préexistant restent intacts ; le travail est isolé dans un autre worktree.
 
-Reste à obtenir : cadrage initial 1B.4, choix du fournisseur d'identité et politique de rôles, preuves de configuration Oracle après autorisation. Aucun secret, jeton ni payload d'exploitation n'est inclus. Fusion, modification du portail et toute intervention d'infrastructure attendent la revue de ChatGPT et l'autorisation explicite du propriétaire.
+Reste à obtenir : choix du fournisseur d'identité et politique de rôles, preuves de configuration Oracle après autorisation. Aucun secret, jeton ni payload d'exploitation n'est inclus. Fusion, modification du portail et toute intervention d'infrastructure attendent la revue de ChatGPT et l'autorisation explicite du propriétaire.
