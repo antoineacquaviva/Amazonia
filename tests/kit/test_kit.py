@@ -76,7 +76,7 @@ class KitTests(unittest.TestCase):
                         m.type, m.linkname = tarfile.SYMTYPE, '/etc/passwd'
                     elif kind == 'bomb':
                         m.name, m.size = 'src/bomb.ts', kit.MAX_BYTES + 1
-                    archive.addfile(m, None)
+                    archive.addfile(m, io.BytesIO(b'\0' * m.size) if kind == 'bomb' else None)
             with self.assertRaises((ValueError, tarfile.TarError)):
                 kit.read_kit(out, kit.digest(out.read_bytes()))
             self.assertFalse((self.root.parent / 'escaped').exists())
