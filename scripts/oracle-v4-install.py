@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
-from v4_kit import need, read_kit, extract_files, check_capacity
+from v4_kit import need, read_kit, extract_files, check_capacity, digest
 
 SERVICES = ('amazonia.service', 'atelier-portail.service', 'lora-studio.service',
             'foret-lab.service', 'caddy.service')
@@ -105,6 +105,10 @@ def install(bundle, checksum, node, npm, env, parent, before=None, requested_por
             check_capacity(parent, size)
             print(label + '…', flush=True)
             run_logged(args, code, env, log)
+        for name, original in files.items():
+            installed = code / name
+            need(installed.resolve() == installed and installed.is_file() and
+                 digest(installed.read_bytes()) == digest(original), 'INSTALLED_SOURCE_CHANGED')
         check = ('import("./src/v4science/protocol.ts").then(m=>{const p=m.provenance();'
                  'if(p.dirty||p.commit!==process.argv[1]||p.sourceHash!==process.argv[2])'
                  'throw Error("PROVENANCE_MISMATCH")})')
@@ -161,7 +165,10 @@ def main():
     read_kit(bundle, os.environ.get('V4_BUNDLE_SHA256', ''))
     raw_node = os.environ.get('V4_NODE') or str(DEFAULT_NODE)
     if not Path(raw_node).exists():
-        raw_node = input('Chemin absolu du Node 24 préparé : ').strip()
+        print('Chemin absolu du Node 24 préparé : ', end='', flush=True)
+        # The operator may have pasted a Python here-document: stdin is then exhausted.
+        with open('/dev/tty') as terminal:
+            raw_node = terminal.readline().strip()
     node, npm, env = runtime(raw_node)
     before = service_snapshot()
     install(bundle, os.environ['V4_BUNDLE_SHA256'], node, npm, env,
