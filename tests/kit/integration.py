@@ -33,13 +33,41 @@ with tempfile.TemporaryDirectory(prefix='v4-kit-real-') as scratch:
         base = 'http://127.0.0.1:' + config['V4_PORT']
         token = (instance / 'runtime/access.key').read_text().strip()
         auth = 'Basic ' + base64.b64encode(('amazonia:' + token).encode()).decode()
-        def get():
-            with urllib.request.urlopen(urllib.request.Request(base + '/api/v4/studies', headers={'Authorization': auth}), timeout=5) as r:
+        def request(suffix='', body=None):
+            headers = {'Authorization': auth}
+            data = None
+            if body is not None:
+                headers.update(Origin=base)
+                headers['Content-Type'] = 'application/json'
+                data = json.dumps(body).encode()
+            with urllib.request.urlopen(urllib.request.Request(base + '/api/v4/studies' + suffix,
+                                                               data=data, headers=headers), timeout=5) as r:
                 return json.load(r)
-        get()
+        request()
+        # Create an actual study in the installed server, distinct from installation smoke.
+        smoke = json.loads((instance / 'exports/installation-smoke/reduced-56.json').read_text())
+        plan = smoke['study']['plan']
+        plan.update(name='Installation restart fixture', configs=plan['configs'][:1],
+                    families=['COORD_HYBRID'], seeds=list(range(71001, 71017)))
+        study = request(body=plan)
+        sid = study['id']
         for action in ('stop', 'start', 'status'):
             subprocess.run([str(instance / 'control.sh'), action], check=True)
-        get()
+        paused = request('/' + sid)
+        assert paused['status'] == 'PAUSED' and paused['completed'] < paused['total']
+        time.sleep(.3)
+        assert request('/' + sid)['completed'] == paused['completed'], 'Automatic resume'
+        request('/' + sid + '/resume', {})
+        end = time.monotonic() + 60
+        while True:
+            result = request('/' + sid)
+            if result['status'] == 'COMPLETED':
+                break
+            assert result['status'] == 'RUNNING' and time.monotonic() < end
+            time.sleep(.1)
+        assert result['completed'] == result['total'] == 16
+        samples = request('/' + sid + '/samples')['samples']
+        assert len(samples) == len({s['unit'] for s in samples}) == 16
         # Wrong credentials cannot read; auth token is never printed.
         try:
             urllib.request.urlopen(base + '/api/v4/studies', timeout=5)
@@ -65,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix='v4-kit-real-') as scratch:
         second = parent / 'second.tar.gz'
         subprocess.run(['python3', '-B', str(ROOT / 'scripts/v4-kit-build.py'), str(second)], cwd=ROOT, check=True)
         assert second.read_bytes() == bundle.read_bytes()
-        print('PASS: source-only reproducible kit, real npm ci/build/56 games, auth, restart, foreign PID and port collision')
+        print('PASS: source-only reproducible kit, real npm ci/build/56 games, auth, durable pause/restart/explicit resume without duplicates, foreign PID and port collision')
     finally:
         if foreign is not None:
             foreign.terminate()
