@@ -1,0 +1,34 @@
+name: V4 source kit and private installation
+on:
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'tests/kit/**'
+      - '.github/workflows/v4-kit.yml'
+      - 'package*.json'
+  push:
+    branches: [mission/v4-oracle-github-kit]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --no-audit --no-fund
+      - run: python3 -B -m unittest discover -s tests/kit -v
+      - run: npm run lint && npm test && npm run build
+      - run: python3 -B tests/kit/integration.py
+      - name: Browser scientific workflow
+        run: |
+          npm install --prefix "$RUNNER_TEMP/v4-browser" --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/v4-browser/node_modules/.bin/playwright" install chromium
+          export V4_PLAYWRIGHT_PACKAGE="$RUNNER_TEMP/v4-browser/package.json"
+          export V4_CHROMIUM="$(node -e 'console.log(require(process.argv[1]).chromium.executablePath())' "$RUNNER_TEMP/v4-browser/node_modules/playwright")"
+          node --import tsx scripts/v4-study-ui-test.ts

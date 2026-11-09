@@ -1,71 +1,179 @@
-# Installation Oracle privée — release V4 scientifique prête
+# Amazonia V4 scientifique — installation privée depuis GitHub
 
-**Préparée et testée localement ; non déployée sur Oracle.** Aucun accès SSH
-Oracle n'est configuré dans cet environnement. Aucune phase P n'a été relancée.
+Le kit est maintenant accessible depuis GitHub, sans fichier à récupérer dans
+un ancien workspace Codex et sans connexion à ChatGPT sur le PC.
 
-Release exacte : `30da62749220f9396e7b3df64b4c06a424b01ae3`.
-Archive livrée : `amazonia-v4-scientific-30da627.tar.gz`.
-SHA256 de cette archive :
-`c9a2c629b060dc994629fab6fa89cdfced1f12be518d2853ab43ac2f35be0a8a`.
-SHA256 des sources d'exécution :
-`537b9e9e3d58491410934df1d25af8a4ea36aed3ab27b5e162fb7ee8476cb9ad`.
+**Pas encore déployé sur Oracle.** Les tests décrits plus bas utilisent des
+environnements jetables ; ils ne prouvent pas les droits ou performances Oracle.
 
-Télécharger l'archive fournie avec la livraison, puis la transférer par le canal
-existant : `scp amazonia-v4-scientific-30da627.tar.gz ALIAS_SSH:~/` et se connecter
-avec `ssh ALIAS_SSH`. **ALIAS_SSH est celui déjà utilisé pour le compte opc**,
-sans créer d'accès réseau. Le second seul paramètre manquant est le chemin absolu
-du Node 24 préparé, avec npm disponible à côté. Aucun secret n'est demandé en chat.
+## 1. Ouvrir la session Oracle habituelle
 
-Dans cette session `opc`, exécuter ce seul bloc Oracle :
+Utiliser le moyen SSH déjà connu pour le compte **opc**. Ce document ne fournit
+ni adresse, ni clé, ni nouvel accès. Le PC doit permettre SSH en plus de GitHub.
 
-```bash
-set -euo pipefail
-umask 077
-export V4_BUNDLE="$HOME/amazonia-v4-scientific-30da627.tar.gz"
-export V4_BUNDLE_SHA256="c9a2c629b060dc994629fab6fa89cdfced1f12be518d2853ab43ac2f35be0a8a"
-read -r -p 'Chemin absolu du Node 24 préparé : ' V4_NODE
-export V4_NODE
-[[ "$(id -un)" == opc ]] || { echo 'Compte opc requis' >&2; exit 1; }
-[[ "$(sha256sum "$V4_BUNDLE" | cut -d' ' -f1)" == "$V4_BUNDLE_SHA256" ]] || {
-  echo 'Archive incorrecte : arrêt avant exécution' >&2; exit 1;
-}
-tar -xOf "$V4_BUNDLE" scripts/oracle-v4-install.sh | bash
-```
+Node 24 et npm doivent être disponibles. Le bloc recherche d'abord, en lecture
+seule, le runtime préparé :
+/home/opc/atelier-preparation-1c3-20261109-01/runtime/node/bin/node.
+S'il n'est pas trouvé, il demande son chemin dans le terminal. Rien dans P
+n'est modifié et /usr/bin/node n'est pas remplacé.
 
-Le script contrôlé figure dans
-[scripts/oracle-v4-install.sh](../scripts/oracle-v4-install.sh). Il crée
-exclusivement un nouveau dossier `~/amazonia-v4-science-XXXXXXXX`, sans sudo, puis
-installe les dépendances verrouillées, vérifie typage/build et provenance, exécute
-56 parties de recette dans un stockage distinct, génère sa clé privée en fichier
-0600, choisit un port libre sur **127.0.0.1** et démarre un processus `nohup`.
-Ressources initiales : un worker, lots de deux, une campagne active ; limite Node
-parent 512 MiB de vieille génération, workers 256 MiB chacun. Ce ne sont pas des
-limites absolues de RSS. Échec explicite si l'une des vérifications échoue ; aucun
-nettoyage ou remplacement d'ancien dossier n'est effectué.
+Prérequis : Python 3.9+, Linux avec /proc, systemctl lisible sans sudo,
+accès HTTPS à raw.githubusercontent.com et au registre npm utilisé par le
+lockfile. Au moins 4 Gio de marge plus les sources et 30 000 inodes libres
+sont contrôlés avant les écritures importantes. Ce budget conservateur ne
+remplace pas le suivi du disque pendant de longues campagnes.
 
-Le bloc affiche `INSTANCE` et `PORT`. Depuis le poste client, ouvrir le tunnel
-**avec le même port local** : `ssh -N -L PORT:127.0.0.1:PORT ALIAS_SSH`, puis
-`http://127.0.0.1:PORT`. Si ce port local est occupé, arrêter son propre tunnel ou
-choisir une nouvelle instance/port libre ; ne pas changer les services voisins.
-Utilisateur HTTP : **amazonia**. Lire le mot de passe uniquement dans le fichier
-privé `INSTANCE/runtime/access.key` depuis la session SSH ; ne pas le placer dans
-une URL, un argument de commande ou un export.
+## 2. Coller ce seul bloc dans Oracle
 
-Contrôles : `INSTANCE/control.sh status`, `stop`, `start` ou `restart`. Le PID est
-vérifié avant tout signal, pour ne jamais arrêter un voisin. Fermer SSH ne coupe
-pas la campagne. Après relance du processus, une campagne interrompue reste
-**PAUSED** jusqu'à une reprise explicite dans l'interface. Aucune unité systemd,
-relance au démarrage de la machine, modification du portail/Caddy, règle réseau,
-compte système ou exposition publique n'est ajoutée.
+Le bloc télécharge une archive de sources figée, vérifie son SHA256 **avant
+tout code téléchargé**, puis lance l'installation. Les échecs sont conservés
+dans de nouveaux dossiers privés, sans écrasement ni purge.
 
-Les checkpoints de l'instance sont dans `INSTANCE/runtime/studies`, les exports
-de recette dans `INSTANCE/exports/installation-smoke`. Pour les sauvegardes et
-exports ultérieurs, utiliser de nouveaux chemins privés ; voir
-[V4_USE.md](V4_USE.md). Ne jamais substituer ces fichiers à ceux de phase P.
+~~~bash
+python3 - <<'PY'
+import hashlib
+import io
+import os
+from pathlib import Path
+import pwd
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
 
-Validation locale de cette release : extraction sans Git, `npm ci`, typage,
-build, empreinte et commit reconnus ; processus détaché avec authentification
-Basic en navigateur, refus anonyme, arrêt/relance, checkpoint PAUSED puis reprise
-explicite jusqu'à quatre unités validées. La syntaxe des deux scripts shell est
-vérifiée. Le compte opc, son binaire Node, les performances et permissions Oracle
-restent à vérifier par le bloc ; aucun déploiement Oracle n'est déclaré réalisé.
+os.umask(0o077)
+if os.geteuid() == 0 or pwd.getpwuid(os.getuid()).pw_name != "opc":
+    raise SystemExit("Compte opc requis, sans sudo.")
+if shutil.disk_usage(Path.home()).free < 4 * 1024**3:
+    raise SystemExit("Moins de 4 Gio libres : arrêt, aucune purge.")
+URL = "https://raw.githubusercontent.com/antoineacquaviva/Amazonia/9da82c2834e5e5cdefd408e2141378b310c19155/distribution/amazonia-v4-fcefe35.tar.gz"
+SHA = "f7e819ebe4062bab42ad7c6cde284b7dc14169495acc533cd133738f768d7e3d"
+with urllib.request.urlopen(URL, timeout=45) as response:
+    raw = response.read(64 * 1024 * 1024 + 1)
+if len(raw) > 64 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != SHA:
+    raise SystemExit("Archive incorrecte : aucun code téléchargé exécuté.")
+stage = Path(tempfile.mkdtemp(prefix="amazonia-v4-download-", dir=Path.home()))
+bundle = stage / "amazonia-v4-fcefe35.tar.gz"
+bundle.write_bytes(raw)
+print("Téléchargement vérifié ; dossier privé :", stage, flush=True)
+with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
+    for name in ("oracle-v4-install.py", "v4_kit.py"):
+        member = archive.getmember("scripts/" + name)
+        if not member.isfile() or member.size > 256 * 1024:
+            raise SystemExit("Installateur invalide.")
+        (stage / name).write_bytes(archive.extractfile(member).read())
+keep = ("HOME", "PATH", "LANG", "LC_ALL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR",
+        "NODE_EXTRA_CA_CERTS", "V4_NODE", "V4_PORT")
+env = {k: os.environ[k] for k in keep if k in os.environ}
+env.update(V4_BUNDLE=str(bundle), V4_BUNDLE_SHA256=SHA)
+raise SystemExit(subprocess.run(
+    [sys.executable, "-B", str(stage / "oracle-v4-install.py")], env=env
+).returncode)
+PY
+~~~
+
+L'installation crée exclusivement une nouvelle instance privée sous
+/home/opc/amazonia-v4-science-..., installe les dépendances verrouillées, vérifie
+typage/build, tous les fichiers de sources et la provenance, puis exécute
+**56 parties de recette** dans un stockage distinct : sept familles × huit
+variantes × une unité, 3 joueurs, 8 tours, 16 positions, ordre J1–J2–J3.
+Le plan et les graines sont ceux du pilote réduit versionné, fixés avant calcul.
+Cette recette exploratoire ne démontre pas l'équilibrage.
+
+Elle vérifie en lecture seule l'état et le PID des cinq services connus avant
+et après, sans les relancer. Si l'état initial est inattendu ou a changé,
+elle s'arrête ; elle ne corrige aucun voisin. Un succès affiche INSTANCE et PORT.
+
+## 3. Ouvrir l'interface depuis le PC
+
+Garder les valeurs INSTANCE et PORT affichées. Dans **un second terminal du PC**,
+ouvrir le tunnel existant, en remplaçant PORT et ALIAS_SSH par leurs valeurs :
+
+~~~bash
+ssh -N -L PORT:127.0.0.1:PORT ALIAS_SSH
+~~~
+
+Puis ouvrir **http://127.0.0.1:PORT**. Le port client doit être le même, car les
+mutations vérifient cette origine exacte. Si le port client est occupé, ne pas
+arrêter un autre programme sans l'identifier ; demander un port d'instance adapté.
+Ne pas ouvrir de port public pour éviter le tunnel.
+
+Utilisateur HTTP : **amazonia**. Dans votre session SSH privée, lire le mot de
+passe dans **INSTANCE/runtime/access.key**, par exemple avec cat et le chemin
+INSTANCE réellement affiché. Ne pas le coller dans GitHub, dans une URL ou ici.
+
+Choisir **V4 expérimentale**, puis le mode **campagne scientifique durable**.
+Le calcul se poursuit si le navigateur ou le tunnel ferme ; rouvrir le tunnel
+pour retrouver l'état. Le serveur reste lié uniquement à 127.0.0.1.
+
+## 4. État, arrêt, relance et données
+
+Remplacer INSTANCE par le chemin réellement affiché :
+
+~~~bash
+INSTANCE/control.sh status
+INSTANCE/control.sh stop
+INSTANCE/control.sh start
+INSTANCE/control.sh restart
+~~~
+
+Un PID n'est signalé qu'après vérification de son propriétaire, exécutable,
+répertoire, arguments et instant de création. Une collision de port est refusée,
+sans arrêter le programme qui l'occupe. Aucun arrêt forcé automatique.
+
+Après interruption du processus, une campagne inachevée revient **PAUSED** :
+sa reprise est une commande explicite dans l'interface. Aucune unité systemd
+ou relance au redémarrage de la VM n'est installée.
+
+- Campagnes : INSTANCE/runtime/studies (SQLite, WAL et SHM).
+- Recette et exports : INSTANCE/exports/installation-smoke.
+- Rapport partageable sans secret : INSTANCE/runtime/installation.json.
+- Journaux privés : INSTANCE/runtime/installation.log et server.log.
+- Sauvegarde/restauration sur cibles neuves : [V4_USE.md](V4_USE.md).
+
+Ne pas copier seulement le fichier SQLite principal pendant une activité :
+utiliser la sauvegarde cohérente existante. Ne pas supprimer les tentatives
+ou les anciennes données. Retirer le déploiement signifie arrêter uniquement
+cette nouvelle instance, en conservant ses données.
+
+## Kit public, vérification et reproduction
+
+- [Télécharger le kit](https://raw.githubusercontent.com/antoineacquaviva/Amazonia/9da82c2834e5e5cdefd408e2141378b310c19155/distribution/amazonia-v4-fcefe35.tar.gz)
+- [SHA256](https://raw.githubusercontent.com/antoineacquaviva/Amazonia/9da82c2834e5e5cdefd408e2141378b310c19155/distribution/amazonia-v4-fcefe35.tar.gz.sha256)
+- [Sources exactes](https://github.com/antoineacquaviva/Amazonia/tree/fcefe3568f753371354035ad0c365d488d8cfc75)
+
+Archive : amazonia-v4-fcefe35.tar.gz — 191705 octets.
+SHA256 : f7e819ebe4062bab42ad7c6cde284b7dc14169495acc533cd133738f768d7e3d.
+Provenance des sources d'exécution : 312e210c4fcb0d969a1f454f0979994e5506ac9ba25d8aa4abccd31d41a0ee8a.
+
+La session ne publie pas de GitHub Release : le kit est conservé comme fichier
+versionné sous distribution/, avec liens épinglés sur un commit. Aucun ancien
+asset n'est remplacé. Le SHA256 détecte une corruption ; téléchargé depuis
+la même origine que l'archive, il n'est pas une signature indépendante.
+
+Le kit contient 78 fichiers admis et un descripteur/manifestes. Sont exclus :
+.git, fichiers .env, node_modules, historiques, bases, résultats détaillés,
+archives Oracle, captures et logs. Le builder lit les blobs d'un commit Git propre
+avec une liste d'admission ; il ne compacte jamais un workspace entier.
+
+Pour reproduire à partir d'un checkout propre **au commit fcefe3568f753371354035ad0c365d488d8cfc75**,
+avec ses dépendances déjà installées, choisir une destination absolue inexistante :
+
+~~~bash
+python3 -B scripts/v4-kit-build.py /chemin/neuf/amazonia-v4-fcefe35.tar.gz
+~~~
+
+Même commit et mêmes sources : mêmes octets d'archive et même checksum.
+Un autre commit produit un nouveau descripteur et donc une autre archive ;
+ne pas lui attribuer l'ancien checksum.
+
+## Périmètre
+
+Pas de sudo, nouvelle clé SSH, compte système, règle réseau ou exposition
+publique. Aucun changement du portail, Caddy, LoRA, Forêt, BGA, services actifs,
+historiques, sauvegardes ou artefacts P. Aucun changement des règles, bots ou
+mesures scientifiques. L'installation Oracle effective reste à exécuter par
+le propriétaire ; voir [le bilan de ce kit](V4_KIT_VALIDATION.md).
