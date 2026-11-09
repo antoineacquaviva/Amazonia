@@ -102,3 +102,12 @@ exposition. Ne pas copier les historiques P vers cette instance, ne pas reprendr
 leurs identifiants et ne pas remplacer leurs artefacts. Exporter V4 vers un
 nouveau répertoire identifié par version et provenance. Les opérations effectives
 sur services, réseau et secrets relèvent d'une mission ultérieure autorisée.
+
+## Suite : campagnes scientifiques durables
+
+Le mode par défaut de l'onglet V4 et de `npm run dev:v4` est désormais décrit dans
+[V4_USE.md](V4_USE.md). Les limites « quatre campagnes en mémoire » et le bot
+unique ci-dessus concernent exclusivement le mode **Démonstration initiale**,
+conservé pour relire ce premier lot. Le protocole scientifique durable a des
+formats, versions, ressources et autorisations Oracle propres ; il ne réécrit
+pas les résultats présentés dans ce document historique.

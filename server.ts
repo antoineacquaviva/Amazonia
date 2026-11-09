@@ -1,3 +1,5 @@
+import { scienceRoutes } from "./src/v4science/routes";
+import { StudyManager } from "./src/v4science/manager";
 import { v4Routes } from './src/server/v4Routes';
 import { internalAuthorization } from "./src/server/internalAuthorization";
 import { apiSecurity, type Authorize } from "./src/server/apiSecurity";
@@ -17,6 +19,7 @@ export async function createApp(
     manager?: CampaignManager;
     web?: boolean;
     authorize?: Authorize;
+    studies?: StudyManager;
   } = {},
 ) {
   const app = express();
@@ -28,6 +31,10 @@ export async function createApp(
   const campaignManager = options.manager ?? new CampaignManager();
   const apiRouter = express.Router();
   apiRouter.use("/v4/campaigns", v4Routes(campaignManager));
+  apiRouter.use("/v4/studies", scienceRoutes(()=>{
+    if(!options.studies) throw new Error("Instance scientifique V4 non configurée ; utiliser le lanceur privé V4");
+    return options.studies;
+  }));
 
   apiRouter.param("id", (req, res, next, id) => {
     try {
