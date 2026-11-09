@@ -1,3 +1,4 @@
+import type { V4WorkerRequest } from "./simWorker";
 import { configuredCampaignsDir } from "./storageConfig";
 import type { singleInput } from "./singleValidation";
 import {
@@ -153,6 +154,13 @@ export class CampaignManager {
   private maxCampaigns: number;
   private batchSize: number;
   private singleBusy = false;
+  async simulateV4(request: V4WorkerRequest) {
+    if (this.closed) throw new Error("Gestionnaire fermé");
+    const response = await this.pool.run(request, () => {});
+    if (response.type !== "RUN_V4_RESULT")
+      throw new Error("Réponse V4 incorrecte");
+    return response.result;
+  }
   async simulateSingle(input: ReturnType<typeof singleInput>) {
     // One transient request, no queue reservation ahead of campaigns. Same workers/time/memory budget.
     if (

@@ -48,4 +48,15 @@ En cas d'incohérence entre ces sources, **signaler le conflit plutôt que réso
 2. Liste des fichiers modifiés et des impacts sur les règles.
 3. Commandes de validation effectivement exécutées et résultat de chacune.
 4. Risques, limites, questions à arbitrer.
-5. Pull request soumise à revue, sans fusion automatique.
+5. Pull request soumise à revue, sans fusion automatique, sauf autorisation explicite propre à une mission.
+
+### Exception bornée : première simulation Amazonia V4 (9 novembre 2026)
+
+La mission autorise le moteur V4, les bots, contrats, interface minimale, tests,
+documentation et démonstration locale sur branche dédiée. La fusion de sa PR est
+autorisée après réussite des contrôles pertinents et résolution des blocages,
+sans revue manuelle intermédiaire. Respecter les protections GitHub ; aucun
+contournement. Cette exception ne s'étend pas aux autres missions. Aucun accès
+ni déploiement Oracle, ni modification des services, réseau, secrets, historiques,
+workspaces ou exports de phase P. La spécification V4 reste expérimentale ; les
+décisions explicites de cette mission priment sur ses questions encore ouvertes.
