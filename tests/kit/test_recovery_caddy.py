@@ -13,21 +13,19 @@ HASH = '$2a$14$' + 'a' * 53
 KEY = 'ab' * 32
 
 def fixture():
-    return {'admin': {'listen': '127.0.0.1:2019'}, 'apps': {
-        'tls': {'automation': {'policies': [{'subjects': ['atelierconceptionjeu.fr']}]}},
-        'http': {'servers': {'srv0': {'listen': [':443'], 'routes': [
-            {'match': [{'host': ['atelierconceptionjeu.fr', 'www.atelierconceptionjeu.fr']}],
-             'handle': [{'handler': 'subroute', 'routes': [
-                 {'match': [{'path': [route]}], 'handle': [{
-                     'handler': 'reverse_proxy',
-                     'upstreams': [{'dial': '127.0.0.1:' + str(port)}],
-                     'flush_interval': -1,
-                 }]} for route, port in [
-                     ('/lora/*',5050), ('/lab/*',8080), ('/bga/*',8082),
-                     ('/amazonia/*',8083), ('/*',3000)
-                 ]
-             }]}
-        ]}}}}}
+    routes = []
+    for route, port in [('/lora/*',5050), ('/lab/*',8080), ('/bga/*',8082),
+                        ('/amazonia/*',8083), ('/*',3000)]:
+        proxy = {'handler':'reverse_proxy',
+                 'upstreams':[{'dial':'127.0.0.1:'+str(port)}], 'flush_interval':-1}
+        routes.append({'match':[{'path':[route]}], 'handle':[proxy]})
+    site = {'match':[{'host':['atelierconceptionjeu.fr','www.atelierconceptionjeu.fr']}],
+            'handle':[{'handler':'subroute','routes':routes}]}
+    server = {'listen':[':443'], 'routes':[site]}
+    return {'admin':{'listen':'127.0.0.1:2019'}, 'apps': {
+        'tls':{'automation':{'policies':[{'subjects':['atelierconceptionjeu.fr']}]}},
+        'http':{'servers':{'srv0':server}},
+    }}
 
 class RecoveryCaddyTests(unittest.TestCase):
     def test_preserves_neighbors_tls_admin_and_input(self):
