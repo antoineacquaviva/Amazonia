@@ -1,0 +1,18 @@
+{
+  "pilotMs": 79.56155899999999,
+  "samplePerVariant": 8,
+  "total": 64,
+  "campaignMs": 12259.804875,
+  "requestPath": "/api/v4/campaigns",
+  "storage": "isolated temporary directory",
+  "completed": 64,
+  "provenance": {
+    "commit": "1d8d99ba3b18b17dd036dbee4a94556899652c0a",
+    "dirty": false,
+    "sourceSha256": "44e445573f6dd34edb0ab47aebc154b30313d94534627a73f7661f7a2a5b0017",
+    "node": "v24.22.1",
+    "rulesVersion": "V4_EXPERIMENTAL_2026_11_09",
+    "botVersion": "V4_PRIVATE_GREEDY_REVISION_1",
+    "observationVersion": "V4_PRIVATE_REVISABLE_1"
+  }
+}
