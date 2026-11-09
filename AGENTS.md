@@ -71,3 +71,12 @@ si un accès existe ; sinon livrer un bloc opérateur. Ne modifier aucun dossier
 script, marqueur ou export de phase P, ni services actifs, portail, Caddy, réseau,
 historiques ou comptes système. Cette exception est propre à la présente mission
 et remplace son interdiction Oracle de la première mission V4, sans l'étendre.
+
+### Exception bornée : kit Oracle V4 accessible depuis GitHub
+
+La mission `docs/missions/V4_ORACLE_GITHUB_KIT.md` autorise les outils de
+packaging, installation privée, tests et documentation, puis leur fusion après
+validation sans revue manuelle intermédiaire. Un kit de code public vérifié peut
+être publié, sans secrets ni données privées. Aucun changement des règles, bots,
+mesures, services existants, réseau, comptes ou artefacts P. Les validations
+locales ne constituent jamais un déploiement Oracle.
