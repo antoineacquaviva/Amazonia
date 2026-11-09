@@ -21,7 +21,7 @@ os.umask(0o077)
 dest = Path(tempfile.mkdtemp(prefix='amazonia-recovery-download-', dir=Path.home()))
 base = 'https://raw.githubusercontent.com/antoineacquaviva/Amazonia/321dacb096158e7900ca12cebeb9a0266d72b9e7/scripts/'
 files = {
-    'oracle-recover.py': '2bd51263a13e2fb1a8b6a827c6cf400a5e9b9e91e9614d24c7495d84f30941c0',
+    'oracle-recover.py': 'd51aec920de7f765f7559f545537ad30b7c45fcdc8e64d7e679ae16784cc1483',
     'oracle-recovery-caddy.py': '3b79020bd1116c96570d40bda28c4e49fcfb8a964267d624ab573c75f567f2b8',
 }
 for name, expected in files.items():

@@ -305,6 +305,7 @@ class Recovery:
         paths=[p for p in paths if p.exists()]
         for name, sources in [('configurations.tar',paths),('code-before.tar',[AMAZONIA,PORTAL])]:
             archive=self.stage/'backups'/name
+            sudo(['/usr/bin/install','-o','root','-g','root','-m','0600','/dev/null',archive],log=self.log)
             sudo(['/usr/bin/tar','--acls','--xattrs','--selinux','--numeric-owner','-cpf',archive,*sources],log=self.log,timeout=600)
             sudo(['/usr/bin/tar','-tf',archive],log=self.log,timeout=120)
             digest=sudo(['/usr/bin/sha256sum',archive],log=None).decode().split()[0]
@@ -431,6 +432,7 @@ class Recovery:
         need(data_inventory(self.stage/'retired-amazonia/data')==self.original and
              data_inventory(HISTORY)==self.original,'ORIGINAL_DATA_CHANGED')
         need(git_head(AMAZONIA)==TARGET and git_head(PORTAL)==PORTAL_COMMIT,'FINAL_SOURCE_VERSION')
+        need(self.registry_path.read_bytes()==self.registry,'REGISTRY_CHANGED_DURING_RECOVERY')
         result={'format':'ORACLE_RECOVERY_RECEIPT_1','success':True,'amazon_commit':TARGET,
                 'portal_commit':PORTAL_COMMIT,'node':str(self.node),'node_version':'v24.22.1',
                 'sourceHash':self.provenance['sourceHash'],'originalFiles':16,
@@ -482,12 +484,12 @@ def main():
         recovery.prepare_configs()
         recovery.activate()
         return 0
-    except Exception as exc:
+    except (Exception,KeyboardInterrupt) as exc:
         # Fixed codes only. Never publish raw config, password, hashes, argv or logs.
         if recovery.log:
             recovery.log.write(traceback.format_exc().encode())
             recovery.log.flush()
-        code=str(exc) if isinstance(exc,Stop) else 'UNEXPECTED_ERROR_SEE_PRIVATE_LOG'
+        code=str(exc) if isinstance(exc,Stop) else ('INTERRUPTED' if isinstance(exc,KeyboardInterrupt) else 'UNEXPECTED_ERROR_SEE_PRIVATE_LOG')
         print('ARRÊT : '+code,flush=True)
         recovery.fail()
         return 1
