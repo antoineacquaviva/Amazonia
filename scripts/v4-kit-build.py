@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import sys
+sys.dont_write_bytecode = True
 from v4_kit import allowed, need, write_kit, read_kit
 
 ROOT = Path(__file__).resolve().parent.parent

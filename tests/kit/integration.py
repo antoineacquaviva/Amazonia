@@ -15,7 +15,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from v4_kit import digest
+from v4_kit import digest, read_kit
 spec = importlib.util.spec_from_file_location('installer', ROOT / 'scripts/oracle-v4-install.py')
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
@@ -24,6 +24,15 @@ with tempfile.TemporaryDirectory(prefix='v4-kit-real-') as scratch:
     parent = Path(scratch)
     bundle = parent / 'kit.tar.gz'
     subprocess.run(['python3', '-B', str(ROOT / 'scripts/v4-kit-build.py'), str(bundle)], cwd=ROOT, check=True)
+    # A published kit must contain exactly the tested runtime sources, independently
+    # of the later commit that adds the binary and documentation.
+    current_meta, current_files, _ = read_kit(bundle, digest(bundle.read_bytes()))
+    for published in (ROOT / 'distribution').glob('*.tar.gz'):
+        expected = Path(str(published) + '.sha256').read_text().split()[0]
+        published_meta, published_files, _ = read_kit(published, expected)
+        assert published_meta['sourceHash'] == current_meta['sourceHash']
+        assert {k:v for k,v in published_files.items() if k != '.release.json'} == \
+               {k:v for k,v in current_files.items() if k != '.release.json'}
     node, npm, env = installer.runtime(shutil.which('node'))
     instance = None
     foreign = None
