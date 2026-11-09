@@ -289,11 +289,39 @@ export async function createApp(
 }
 
 async function startServer() {
-  const { app } = await createApp({authorize: internalAuthorization()});
-  const port = Number(process.env.PORT) || 3000;
-  app.listen(port, "127.0.0.1", () =>
-    console.log(`Serveur actif sur le port ${port}`),
-  );
+  const root = process.env.V4_STUDIES_DIR;
+  if (root && (
+    !path.isAbsolute(root) || path.resolve(root) !== root ||
+    root === process.cwd() || root.startsWith(process.cwd() + path.sep)
+  )) throw new Error("V4_STUDIES_DIR canonique requis hors du code");
+  const port = Number(process.env.PORT ?? 3000);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535)
+    throw new Error("Port backend non privilégié explicite requis");
+  const authorize = internalAuthorization();
+  const manager = new CampaignManager();
+  let studies: StudyManager | undefined;
+  try {
+    studies = root ? new StudyManager({ root }) : undefined;
+    const { app } = await createApp({ manager, studies, authorize });
+    const server = app.listen(port, "127.0.0.1", () =>
+      console.log(`Serveur actif sur le port ${port}`),
+    );
+    let closing = false;
+    const close = (code: number) => {
+      if (closing) return;
+      closing = true;
+      if (server.listening) server.close();
+      server.closeAllConnections();
+      void Promise.all([manager.close(), studies?.close()])
+        .finally(() => process.exit(code));
+    };
+    server.once("error", () => close(1));
+    process.once("SIGTERM", () => close(0));
+    process.once("SIGINT", () => close(0));
+  } catch (error) {
+    await Promise.all([manager.close(), studies?.close()]);
+    throw error;
+  }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
   void startServer();
