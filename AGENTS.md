@@ -80,3 +80,14 @@ validation sans revue manuelle intermédiaire. Un kit de code public vérifié p
 être publié, sans secrets ni données privées. Aucun changement des règles, bots,
 mesures, services existants, réseau, comptes ou artefacts P. Les validations
 locales ne constituent jamais un déploiement Oracle.
+
+### Exception bornée : remise en service ciblée du 9 novembre 2026
+
+Le propriétaire a autorisé le lot décrit dans docs/ORACLE_RECOVERY_PLAN.md :
+fusion de la PR #12, secrets privés générés sur la VM, configurations ciblées
+Amazonia/portail et Caddy, sauvegardes fraîches et bloc opérateur testé. Les
+outils nécessaires à ce même lot peuvent être fusionnés après validation sans
+nouvel accord. Sans accès SSH, livrer le bloc à exécuter sous opc ; ne jamais
+prétendre avoir activé Oracle. Préserver comptes, réseau, Node global, voisins,
+originaux historiques et tous les artefacts P. Cette exception remplace les
+restrictions des missions précédentes uniquement dans ce périmètre.

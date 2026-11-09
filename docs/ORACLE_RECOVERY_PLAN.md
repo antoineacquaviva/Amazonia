@@ -1,4 +1,4 @@
-# Remise en service Oracle — plan préparé, pas d'autorisation d'exécution
+# Remise en service Oracle — lot autorisé
 
 État communiqué le 9 novembre 2026 après utilisation du bouton de déploiement.
 Ce document prépare une réparation ciblée. Aucun accès Oracle, secret réel,
@@ -55,16 +55,18 @@ La réparation ne ferme pas les anciens ports réseau et ne prétend pas traiter
 l'exposition des voisins. Les API du portail et d'Amazonia restent protégées
 par leur garde interne même en accès direct.
 
-## Intervention proposée à faire approuver en un lot
+## Intervention autorisée en un lot
 
-Ce qui suit est un périmètre concret de préparation/activation, pas une commande
-à exécuter depuis cette PR. La consigne originale exige un accord distinct pour
-les secrets et les modifications de production ; seul l'arrêt d'Amazonia a été
-autorisé jusqu'ici.
+Le propriétaire a explicitement autorisé le 9 novembre 2026 la fusion de la
+PR #12, la création des secrets privés et les modifications ciblées des services
+et de Caddy. Cet accord inclut la préparation du bloc opérateur regroupé ; il
+ne vaut pas autorisation de modifier le réseau, les comptes, Node global ou P.
+Aucun accès SSH Oracle n'est disponible dans cette discussion : l'activation
+reste à exécuter par le propriétaire sur sa session habituelle.
 
 1. Contrôler à nouveau versions/PID, accès sudo habituel, capacité/inodes,
-   services et originalité des fichiers. Refuser les modifications locales
-   inexpliquées ou une autre topologie Caddy ; aucun reset --hard.
+   services et originalité des fichiers. Conserver intégralement le checkout original, y compris ses modifications
+   locales, et refuser une autre topologie Caddy ; aucun reset --hard.
 2. Créer un nouveau dossier privé sous /home/opc, hors P et des anciens dossiers.
    Y conserver sauvegardes fraîches des données à froid d'Amazonia, code,
    unités/drop-ins, fichiers de configuration et copie JSON effective de Caddy.
@@ -135,3 +137,51 @@ Le workflow contrôle aussi la distribution historique contre son propre commit
 Git, plutôt que de lui imposer l'égalité avec toutes les évolutions futures.
 La disponibilité de ce correctif dans GitHub n'atteste aucun de ces contrôles
 sur Oracle : consulter les checks réels de la PR.
+
+## Opérateur regroupé : scripts/oracle-recover.py
+
+Le script doit être téléchargé avec son compagnon oracle-recovery-caddy.py depuis
+un commit Git fixe et vérifié par SHA-256 avant exécution. Il s'exécute sous opc ;
+sudo est limité aux commandes système ciblées. Aucun interpréteur utilisateur
+ne tourne en root. Sans --apply-approved, il effectue seulement les précontrôles.
+
+La cible applicative reste le merge validé de la PR #12 :
+c0517950f18487faff02744c6409083659e7c495.
+Le script refuse un autre état de départ, un port/proxy inconnu, une unité avec
+hooks, un drop-in de récupération existant, moins de 6 Gio (davantage selon la
+taille réelle à sauvegarder) ou 40 000 inodes. Il teste d'abord le Node préparé
+dans une unité systemd transitoire sous opc ; un refus SELinux arrête le lot
+avant modification persistante, sans désactiver SELinux.
+
+Tout est créé dans un nouveau dossier privé /home/opc/amazonia-recovery-*. Les
+archives neuves de configuration et code sont relues et munies d'une empreinte.
+Le code Amazonia est cloné dans un emplacement neuf, installé et compilé avec
+Node 24 avant échange des dossiers sur le même volume. Le vieux checkout reste
+entier sous retired-amazonia ; les 16 JSON sont copiés et vérifiés avant que les
+gestionnaires n'ouvrent cette copie. Les originaux ne sont jamais initialisés.
+
+Le Caddyfile original est conservé. Un nouveau JSON root:caddy 0640 sous
+/etc/caddy est validé comme utilisateur caddy ; un drop-in fait employer ce même
+JSON aux prochains démarrages et recharges. Le processus actuel est rechargé,
+pas arrêté. LoRA et Forêt ne sont jamais redémarrés. Les PID identiques sont
+contrôlés ; cela ne remplace pas une recette fonctionnelle complète des voisins.
+
+La recette effectue uniquement des lectures : garde interne, liste scientifique,
+HTTPS avec certificat vérifié, absence/mauvais mot de passe et preuve usurpée
+refusés, bon mot de passe accepté. Elle ne lance aucune campagne réelle et ne
+prétend pas résoudre les anciens ports réseau ou le durcissement des comptes.
+Les clés et mots de passe sont générés sur Oracle uniquement ; le terminal ne
+montre que le chemin du fichier privé à consulter.
+
+En cas d'échec après le début de l'échange des backends, les deux backends sont
+arrêtés et l'état privé conservé pour diagnostic. Ne pas relancer le bloc à
+l'aveugle ni restaurer automatiquement le frontal non authentifié. Le journal
+et les archives peuvent contenir des informations privées : ne pas les publier.
+La sortie expurgée et report.json/failure.json suffisent au premier diagnostic.
+
+Validation de l'opérateur : tests Python sur fixtures (états inattendus, copie
+historique, liens/écrasements, environnement, commandes privilégiées, refus par
+défaut, secrets hors arguments, arrêt ciblé). L'orchestration réelle systemd,
+SELinux et les chemins Oracle ne peuvent être certifiés par ces tests : leurs
+précontrôles font partie de l'exécution opérateur. Le workflow complet ajoute
+les tests applicatifs, typage, build, kit, navigateur et vrai Caddy 2.11.7.
