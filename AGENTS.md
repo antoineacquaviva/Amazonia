@@ -91,3 +91,8 @@ nouvel accord. Sans accès SSH, livrer le bloc à exécuter sous opc ; ne jamais
 prétendre avoir activé Oracle. Préserver comptes, réseau, Node global, voisins,
 originaux historiques et tous les artefacts P. Cette exception remplace les
 restrictions des missions précédentes uniquement dans ce périmètre.
+
+Le correctif du refus 203/EXEC peut créer une copie isolée et vérifiée du seul
+binaire Node sous un nouveau /usr/local/bin/amazonia-runtime-*/node et appliquer
+restorecon uniquement à cette copie. Ne modifier aucun Node/lien global, fichier
+P ou politique SELinux. La sonde systemd sous opc précède toute activation.
