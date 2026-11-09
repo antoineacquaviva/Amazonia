@@ -83,8 +83,12 @@ reste à exécuter par le propriétaire sur sa session habituelle.
    Conserver clé, mot de passe et hash dans des fichiers privés.
 5. Préparer deux fichiers d'environnement privés et deux drop-ins dédiés.
    Conserver les comptes opc existants pour cette réparation, sans créer de compte.
-   Employer le Node 24 préparé en lecture seule et un ExecStart direct :
+   Lire le Node 24 préparé sans le modifier, puis utiliser sa copie dédiée et un ExecStart direct :
    NODE24 --import tsx server.ts, avec le WorkingDirectory actuel de chaque dépôt.
+   Créer une copie vérifiée du binaire seul sous un nouveau dossier
+   /usr/local/bin/amazonia-runtime-*/node, root:root 0755, sans modifier le Node
+   global ni les liens existants. restorecon vise uniquement ce nouveau dossier.
+   La sonde systemd doit réussir sous opc avant toute activation des applications.
    Variables communes : NODE_ENV=production, clé interne par fichier,
    origines HTTPS exactes atelierconceptionjeu.fr et www.atelierconceptionjeu.fr.
    Amazonia : PORT=8083, AMAZONIA_CAMPAIGNS_DIR=<nouvelle copie>/data/campaigns,
@@ -149,9 +153,9 @@ La cible applicative reste le merge validé de la PR #12 :
 c0517950f18487faff02744c6409083659e7c495.
 Le script refuse un autre état de départ, un port/proxy inconnu, une unité avec
 hooks, un drop-in de récupération existant, moins de 6 Gio (davantage selon la
-taille réelle à sauvegarder) ou 40 000 inodes. Il teste d'abord le Node préparé
-dans une unité systemd transitoire sous opc ; un refus SELinux arrête le lot
-avant modification persistante, sans désactiver SELinux.
+taille réelle à sauvegarder) ou 40 000 inodes. Après sauvegarde, il teste la copie dédiée du Node préparé dans une unité
+systemd transitoire sous opc, avec sortie vers le journal. Un refus arrête le lot
+avant modification des applications ou de Caddy, sans désactiver SELinux.
 
 Tout est créé dans un nouveau dossier privé /home/opc/amazonia-recovery-*. Les
 archives neuves de configuration et code sont relues et munies d'une empreinte.
@@ -185,3 +189,30 @@ défaut, secrets hors arguments, arrêt ciblé). L'orchestration réelle systemd
 SELinux et les chemins Oracle ne peuvent être certifiés par ces tests : leurs
 précontrôles font partie de l'exécution opérateur. Le workflow complet ajoute
 les tests applicatifs, typage, build, kit, navigateur et vrai Caddy 2.11.7.
+
+## Incident de la sonde et correction ciblée
+
+Le 9 novembre 2026, la première tentative wiw67czo s'est arrêtée avant création
+des secrets, sauvegardes tar ou activation : systemd-run --pipe a renvoyé
+« Remote peer disconnected ». Une sonde sans --pipe a pu créer l'unité, puis a
+renvoyé 203/EXEC « Failed to locate executable ... Permission denied » pour le
+Node situé sous /home/opc. Le binaire fonctionne pourtant en session opc.
+SELinux est Enforcing ; l'absence d'audit AVC partagé ne permet pas d'attribuer
+formellement ce refus à SELinux plutôt qu'à un autre contrôle d'accès.
+
+Le correctif conserve le runtime P intact. Une copie neuve du seul exécutable
+est installée dans /usr/local/bin/amazonia-runtime-<identifiant>/node, avec
+propriétaire root, mode 0755, vérification SHA-256 de source et destination, et
+restorecon restreint à ce nouveau dossier. Les scripts npm de préparation
+restent lus depuis P et utilisent la copie Node via le PATH local de l'opération.
+Les unités applicatives emploieront directement ce nouveau chemin. Aucun lien
+node/npm global, réglage SELinux, compte, permission du HOME ou fichier P n'est
+modifié. Un dossier déjà présent est refusé, jamais écrasé.
+
+La sonde est lancée sans --pipe et avec sortie vers le journal systemd. Elle
+vérifie node:sqlite et la version exacte. En cas d'échec, seul son journal est
+copié dans le journal privé de l'opération ; la copie inutilisée reste conservée
+pour diagnostic. La réussite sous systemd est une condition d'activation,
+pas une validation prétendue depuis CI. Les nouveaux tests couvrent copie
+identique, corruption refusée, collision, métadonnées et échec de sonde sans
+intervention sur les backends ; les commandes privilégiées sont simulées.

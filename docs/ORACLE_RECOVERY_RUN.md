@@ -10,6 +10,12 @@ minutes ; garder la session ouverte. Ce bloc télécharge les deux scripts depui
 le commit fixe indiqué et contrôle leurs empreintes avant toute exécution.
 Le script effectue les sauvegardes, prépare le code et les configurations puis
 redémarre le portail, démarre Amazonia et recharge Caddy dans le périmètre autorisé.
+Il crée une copie root:root 0755 du seul binaire Node préparé dans un nouveau
+dossier /usr/local/bin/amazonia-runtime-*/node, compare les empreintes, applique
+restorecon uniquement à ce nouveau dossier puis teste cette copie sous systemd.
+Le Node système, les liens globaux, les comptes et les artefacts P ne changent pas.
+La tentative précédente arrêtée avant activation reste conservée ; ce nouveau
+bloc utilise un nouveau dossier et refait ses contrôles, sans reprendre à l'aveugle.
 
 ```sh
 python3 - <<'PY'
@@ -19,9 +25,9 @@ if os.geteuid() == 0 or Path.home() != Path('/home/opc'):
     raise SystemExit('Utiliser la session opc habituelle, sans sudo devant python3.')
 os.umask(0o077)
 dest = Path(tempfile.mkdtemp(prefix='amazonia-recovery-download-', dir=Path.home()))
-base = 'https://raw.githubusercontent.com/antoineacquaviva/Amazonia/8d0f47dc5cbcccaa6dc1eeec81ff0b106d2a6579/scripts/'
+base = 'https://raw.githubusercontent.com/antoineacquaviva/Amazonia/db5c861663631c2951ceade8acf0065794725b47/scripts/'
 files = {
-    'oracle-recover.py': 'd51aec920de7f765f7559f545537ad30b7c45fcdc8e64d7e679ae16784cc1483',
+    'oracle-recover.py': 'f0f7e1a797f528d7db97e0b1fb7e6cd04a6024d580c2f40d314c92ebc05d0ce8',
     'oracle-recovery-caddy.py': '3b79020bd1116c96570d40bda28c4e49fcfb8a964267d624ab573c75f567f2b8',
 }
 for name, expected in files.items():

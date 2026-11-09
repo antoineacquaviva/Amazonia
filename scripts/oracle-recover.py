@@ -26,6 +26,7 @@ PORTAL = Path('/srv/jeu/atelier-portail-maitre')
 HISTORY = Path('/home/opc/amazonia-data-backup-20261108-125739/data')
 NODE = Path('/home/opc/atelier-preparation-1c3-20261109-01/runtime/node/bin/node')
 CADDY = Path('/usr/bin/caddy')
+SERVICE_RUNTIME_ROOT = Path('/usr/local/bin')
 SYSTEM_PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 SERVICES = ('amazonia.service', 'atelier-portail.service', 'caddy.service',
             'lora-studio.service', 'foret-lab.service')
@@ -41,6 +42,13 @@ def need(ok, code):
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+def file_sha(path):
+    h=hashlib.sha256()
+    with Path(path).open('rb') as f:
+        for block in iter(lambda:f.read(1024*1024),b''):
+            h.update(block)
+    return h.hexdigest()
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
@@ -80,7 +88,8 @@ def refresh_sudo():
 def sudo(args, log=None, timeout=60):
     # No shell, password, secret value, Node program or user Python runs under sudo.
     allowed = {'/usr/bin/tar','/usr/bin/install','/usr/bin/systemctl',
-               '/usr/bin/mv','/usr/bin/sha256sum','/usr/bin/caddy','/usr/bin/systemd-run'}
+               '/usr/bin/mv','/usr/bin/sha256sum','/usr/bin/caddy','/usr/bin/systemd-run',
+               '/usr/bin/journalctl','/usr/sbin/restorecon'}
     need(str(args[0]) in allowed, 'PRIVILEGED_COMMAND_NOT_ALLOWED')
     return command(['/usr/bin/sudo','-n','--',*args], log=log, timeout=timeout)
 
@@ -255,11 +264,12 @@ class Recovery:
         need(self.npm.is_file() and os.access(self.npm,os.X_OK),'NPM_NEXT_TO_NODE_REQUIRED')
         need(command([CADDY,'version']).decode().startswith('v2.11.7'),'CADDY_VERSION_CHANGED')
         need(shutil.which('curl',path=SYSTEM_PATH)=='/usr/bin/curl','CURL_REQUIRED')
-        for p in (Path('/etc/caddy'),Path('/etc/systemd/system')):
+        for p in (Path('/etc/caddy'),Path('/etc/systemd/system'),SERVICE_RUNTIME_ROOT):
             trusted_directory(p)
         grp.getgrnam('caddy')
         need(grp.getgrnam('opc').gr_gid==pwd.getpwnam('opc').pw_gid,'OPC_GROUP')
         need(Path('/usr/bin/systemd-run').is_file(),'SYSTEMD_RUN_REQUIRED')
+        need(Path('/usr/sbin/restorecon').is_file(),'RESTORECON_REQUIRED')
         self.targets={u:Path('/etc/systemd/system')/(u+'.d')/'90-amazonia-recovery.conf'
                       for u in ('amazonia.service','atelier-portail.service','caddy.service')}
         for target in self.targets.values():
@@ -290,15 +300,6 @@ class Recovery:
         new_file(self.stage/'registry-before.private.json',self.registry)
         new_file(self.stage/'data-before.private.json',canonical(self.original))
         refresh_sudo()
-        # Probe the exact runtime in a transient systemd service under opc before
-        # modifying any application, data original, persistent unit or Caddy.
-        probe='amazonia-recovery-probe-'+self.stage.name.split('recovery-',1)[1]
-        try:
-            sudo(['/usr/bin/systemd-run','--unit='+probe,'--wait','--pipe','--collect','--quiet',
-                  '--property=User=opc','--property=Group=opc',str(self.node),
-                  '-e','require("node:sqlite"); console.log(process.version)'],log=self.log)
-        except Stop:
-            raise Stop('SYSTEMD_NODE24_PROBE_FAILED_BEFORE_ACTIVATION') from None
         paths=[Path('/etc/caddy'),Path('/usr/lib/systemd/system/caddy.service')]
         for unit in ('amazonia.service','atelier-portail.service','caddy.service'):
             paths.extend([Path('/etc/systemd/system')/unit,Path('/etc/systemd/system')/(unit+'.d')])
@@ -312,6 +313,46 @@ class Recovery:
             new_file(self.stage/'backups'/(name+'.sha256'),digest+'  '+name+'\n')
         need(data_inventory(AMAZONIA/'data')==self.original,'DATA_CHANGED_DURING_BACKUP')
         copy_data(AMAZONIA/'data',self.stage/'data',self.original)
+
+    def prepare_service_runtime(self):
+        self.progress('runtime-dédié-et-sonde-systemd')
+        # Do not relabel or alter P, the global node, PATH links or SELinux policy.
+        source=self.node
+        original_sha=file_sha(source)
+        run_id=self.stage.name.removeprefix('amazonia-recovery-')
+        folder=SERVICE_RUNTIME_ROOT/('amazonia-runtime-'+run_id)
+        need(not folder.exists() and not folder.is_symlink(),'SERVICE_RUNTIME_ALREADY_EXISTS')
+        trusted_directory(folder.parent)
+        sudo(['/usr/bin/install','-d','-o','root','-g','root','-m','0755',folder],log=self.log)
+        self.runtime_folder=folder
+        node=folder/'node'
+        sudo(['/usr/bin/install','-o','root','-g','root','-m','0755',source,node],log=self.log)
+        # Use existing policy defaults only, restricted to this new copy.
+        sudo(['/usr/sbin/restorecon','-R',folder],log=self.log)
+        trusted_directory(folder)
+        need(node.is_file() and not node.is_symlink() and node.stat().st_uid==0 and
+             (node.stat().st_mode & 0o777)==0o755,'SERVICE_RUNTIME_METADATA')
+        need(file_sha(node)==original_sha and file_sha(source)==original_sha,'SERVICE_RUNTIME_COPY_MISMATCH')
+        self.node=node
+        self.env=env_for(node)
+        self.runtime_sha=original_sha
+        new_file(self.stage/'runtime-copy.json',json.dumps({
+            'source':str(source),'copy':str(node),'sha256':original_sha,
+            'sourceUnchanged':True,'globalNodeChanged':False},indent=2)+'\n')
+        probe='amazonia-recovery-probe-'+run_id
+        try:
+            sudo(['/usr/bin/systemd-run','--unit='+probe,'--wait','--collect','--quiet',
+                  '--property=User=opc','--property=Group=opc',
+                  '--property=StandardOutput=journal','--property=StandardError=journal',
+                  str(node),'-e',
+                  'require("node:sqlite");if(process.version!=="v24.22.1")process.exit(1);console.log("AMAZONIA_NODE24_OK:"+process.version)'],
+                 log=self.log)
+        except Stop:
+            try:
+                sudo(['/usr/bin/journalctl','-u',probe+'.service','-n','40','--no-pager','-o','cat'],log=self.log)
+            except Stop:
+                pass
+            raise Stop('SYSTEMD_DEDICATED_NODE24_PROBE_FAILED_BEFORE_ACTIVATION') from None
 
     def prepare_code(self):
         self.progress('préparation-code-validé')
@@ -435,7 +476,8 @@ class Recovery:
         need(self.registry_path.read_bytes()==self.registry,'REGISTRY_CHANGED_DURING_RECOVERY')
         result={'format':'ORACLE_RECOVERY_RECEIPT_1','success':True,'amazon_commit':TARGET,
                 'portal_commit':PORTAL_COMMIT,'node':str(self.node),'node_version':'v24.22.1',
-                'sourceHash':self.provenance['sourceHash'],'originalFiles':16,
+                'sourceHash':self.provenance['sourceHash'],'runtimeSha256':self.runtime_sha,
+                'globalNodeChanged':False,'originalFiles':16,
                 'originalsUnchanged':True,'protectedProxyPorts':[3000,8083],
                 'neighborPortsUnchanged':[5050,8080,8082],
                 'caddyAndNeighborsSamePID':True,'v4StudyDir':str(self.stage/'studies'),
@@ -480,6 +522,7 @@ def main():
             print('CONTRÔLES_RÉUSSIS_AUCUNE_ÉCRITURE ; activation uniquement avec accord explicite.')
             return 0
         recovery.backup()
+        recovery.prepare_service_runtime()
         recovery.prepare_code()
         recovery.prepare_configs()
         recovery.activate()

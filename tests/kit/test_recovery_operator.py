@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -162,6 +163,72 @@ class OperatorTests(unittest.TestCase):
                                              (ROOT/'scripts/oracle-recover.py').read_bytes())
                 finally:
                     os.umask(old_umask)
+
+    def test_dedicated_runtime_is_verified_before_probe_and_never_changes_source(self):
+        for outcome in ('success','corruption','probe_failure','exists'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory).resolve()
+                runtime_root=root/'bin'
+                runtime_root.mkdir()
+                source=root/'prepared-node'
+                source.write_bytes(b'synthetic executable fixture')
+                before=m.file_sha(source)
+                stage=root/'amazonia-recovery-fixture'
+                stage.mkdir()
+                copied=runtime_root/'amazonia-runtime-fixture/node'
+                if outcome=='exists': copied.parent.mkdir()
+                recovery=m.Recovery()
+                recovery.stage=stage
+                recovery.node=source
+                calls=[]
+                def fake_sudo(args,**kwargs):
+                    calls.append(args)
+                    if args[0]=='/usr/bin/install':
+                        if '-d' in args:
+                            Path(args[-1]).mkdir(mode=0o755)
+                        else:
+                            shutil.copyfile(args[-2],args[-1])
+                            Path(args[-1]).chmod(0o755)
+                            if outcome=='corruption': Path(args[-1]).write_bytes(b'altered')
+                    elif args[0]=='/usr/bin/systemd-run' and outcome=='probe_failure':
+                        raise m.Stop('fixture failure')
+                    return b''
+                real_stat=Path.stat
+                def stat(path,*args,**kwargs):
+                    result=real_stat(path,*args,**kwargs)
+                    if path==copied:
+                        fields=list(result)
+                        fields[4]=0 # emulate root-owned install without real privilege
+                        return os.stat_result(fields)
+                    return result
+                with patch.object(m,'SERVICE_RUNTIME_ROOT',runtime_root), \
+                     patch.object(m,'sudo',side_effect=fake_sudo), \
+                     patch.object(m,'trusted_directory'), patch.object(Path,'stat',stat), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    if outcome=='success': recovery.prepare_service_runtime()
+                    else:
+                        with self.assertRaises(m.Stop): recovery.prepare_service_runtime()
+                self.assertEqual(m.file_sha(source),before)
+                self.assertFalse(recovery.backends_touched)
+                self.assertFalse(any(a[0]=='/usr/bin/systemctl' for a in calls))
+                if outcome in ('success','probe_failure'):
+                    restore=next(a for a in calls if a[0]=='/usr/sbin/restorecon')
+                    self.assertEqual(restore,['/usr/sbin/restorecon','-R',copied.parent])
+                    probe=next(a for a in calls if a[0]=='/usr/bin/systemd-run')
+                    self.assertNotIn('--pipe',probe)
+                    self.assertIn('--property=User=opc',probe)
+                    self.assertIn(str(copied),probe)
+                    self.assertNotIn(str(source),probe)
+                    receipt=json.loads((stage/'runtime-copy.json').read_text())
+                    self.assertEqual(receipt['sha256'],before)
+                    self.assertFalse(receipt['globalNodeChanged'])
+                    self.assertEqual(recovery.env['PATH'].split(':')[0],str(copied.parent))
+                else:
+                    self.assertFalse(any(a[0]=='/usr/bin/systemd-run' for a in calls))
+                if outcome=='probe_failure':
+                    journal=next(a for a in calls if a[0]=='/usr/bin/journalctl')
+                    self.assertIn('amazonia-recovery-probe-fixture.service',journal)
+                if outcome=='exists': self.assertEqual(calls,[])
 
     def test_default_mode_never_activates(self):
         with patch('sys.argv',['oracle-recover.py']), patch.object(m.Recovery,'preflight'), \
