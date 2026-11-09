@@ -1,3 +1,4 @@
+import { v4Routes } from './src/server/v4Routes';
 import { internalAuthorization } from "./src/server/internalAuthorization";
 import { apiSecurity, type Authorize } from "./src/server/apiSecurity";
 import { singleInput } from "./src/server/singleValidation";
@@ -26,6 +27,7 @@ export async function createApp(
 
   const campaignManager = options.manager ?? new CampaignManager();
   const apiRouter = express.Router();
+  apiRouter.use("/v4/campaigns", v4Routes(campaignManager));
 
   apiRouter.param("id", (req, res, next, id) => {
     try {

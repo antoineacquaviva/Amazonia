@@ -1,3 +1,4 @@
+import { V4View } from './components/V4View';
 import {ScientificResultsView} from './components/ScientificResultsView';
 import type {ManagedRecord} from './server/campaignManager';
 import React, { useState, useEffect, useCallback } from 'react';
@@ -23,7 +24,7 @@ import { StressTestView } from './components/StressTestView';
 import { JournalsAndExportView } from './components/JournalsAndExportView';
 import { Sun, Moon, RefreshCw, Cpu, AlertTriangle } from 'lucide-react';
 
-type ActiveTab = 'dashboard' | 'builder' | 'stress' | 'journals';
+type ActiveTab = 'dashboard' | 'builder' | 'stress' | 'journals' | 'v4';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -162,6 +163,7 @@ export default function App() {
 
         {/* Zone 2 : 4 concise single-line text navigation links */}
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
+          <a href="#v4" onClick={e=>{e.preventDefault();setActiveTab('v4');}} className="whitespace-nowrap font-semibold">V4 expérimentale</a>
           <a
             href="#dashboard"
             onClick={(e) => {
@@ -285,6 +287,7 @@ export default function App() {
               onChange={(e) => setActiveTab(e.target.value as ActiveTab)}
               className="px-2 py-1 text-xs bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded"
             >
+              <option value="v4">V4 expérimentale</option>
               <option value="dashboard">Tableau & Résultats</option>
               <option value="builder">Configurateur Monte-Carlo</option>
               <option value="stress">Stress-Test VM</option>
@@ -370,7 +373,7 @@ export default function App() {
 
       {/* Contenu Principal (Largeur 1440px max centrée) */}
       <main className="flex-1 w-full max-w-[1440px] mx-auto px-6 py-8">
-        {(selectedCampaign as ManagedRecord | null)?.orchestration &&
+        {activeTab !== 'v4' && (selectedCampaign as ManagedRecord | null)?.orchestration &&
           (() => {
             const o = (selectedCampaign as ManagedRecord).orchestration!;
             return (
@@ -396,7 +399,7 @@ export default function App() {
               </aside>
             );
           })()}
-        {selectedCampaign && (((selectedCampaign.config as {protocol?:string}).protocol??'HISTORICAL_V33')==='HISTORICAL_V33') && <p className="p-3 border rounded">HISTORICAL_V33 : référence historique ; RNG partagé, gains descriptifs et contrôle omniscient non certifié optimal.</p>}
+        {activeTab !== 'v4' && selectedCampaign && (((selectedCampaign.config as {protocol?:string}).protocol??'HISTORICAL_V33')==='HISTORICAL_V33') && <p className="p-3 border rounded">HISTORICAL_V33 : référence historique ; RNG partagé, gains descriptifs et contrôle omniscient non certifié optimal.</p>}
         {activeTab === 'dashboard' && (selectedCampaign && (selectedCampaign.config as {protocol?:string}).protocol==='SCIENTIFIC_V1' ? <ScientificResultsView campaign={selectedCampaign as ManagedRecord} campaigns={campaigns} onSelect={setSelectedCampaignId} onControl={handleControlCampaign} onDelete={handleDeleteCampaign}/> : (
 
           <DashboardView
@@ -409,6 +412,7 @@ export default function App() {
           />
         ))}
 
+        {activeTab === 'v4' && <V4View />}
         {activeTab === 'builder' && (
           <EvaluationBuilderView
             onStartCampaign={handleLaunchCampaign}

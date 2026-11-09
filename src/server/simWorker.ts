@@ -1,3 +1,5 @@
+import { runV4 } from "../v4/engine";
+import type { V4Config, GameResult, Provenance } from "../v4/types";
 import { runScientificGame } from "../scientific/runner";
 import type { ProtocolConfig } from "../scientific/protocol";
 import { parentPort } from "node:worker_threads";
@@ -56,17 +58,40 @@ export interface StressBatchWorkerResponse {
   outcomes: StressJobOutcome[];
 }
 
+export interface V4WorkerRequest {
+  taskId: number;
+  type: "RUN_V4";
+  config: V4Config;
+  seed: number;
+  trace: boolean;
+  provenance: Provenance;
+}
+export interface V4WorkerResponse {
+  taskId: number;
+  type: "RUN_V4_RESULT";
+  result: GameResult;
+}
 export type WorkerRequestMessage =
+  | V4WorkerRequest
   | EvalBatchWorkerRequest
   | StressBatchWorkerRequest;
 
 export type WorkerResponseMessage =
+  | V4WorkerResponse
   | EvalBatchWorkerResponse
   | StressBatchWorkerResponse;
 
 if (parentPort) {
   parentPort.on("message", (msg: WorkerRequestMessage) => {
-    if (msg.type === "RUN_EVAL_BATCH") {
+    if (msg.type === "RUN_V4") {
+      const result = runV4(msg.config, msg.seed, msg.trace);
+      result.provenance = msg.provenance;
+      parentPort?.postMessage({
+        taskId: msg.taskId,
+        type: "RUN_V4_RESULT",
+        result,
+      } satisfies V4WorkerResponse);
+    } else if (msg.type === "RUN_EVAL_BATCH") {
       const results: SingleGameResult[] = [];
       for (const job of msg.jobs) {
         const gRes =

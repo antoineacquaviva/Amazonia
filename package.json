@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "TSX_DISABLE_CACHE=1 node --import tsx --test tests/*.test.ts"
+    "test": "TSX_DISABLE_CACHE=1 node --import tsx --test tests/*.test.ts",
+    "dev:v4": "tsx scripts/v4-dev.ts",
+    "demo:v4": "tsx scripts/v4-demo.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
