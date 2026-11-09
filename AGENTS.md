@@ -60,3 +60,14 @@ contournement. Cette exception ne s'étend pas aux autres missions. Aucun accès
 ni déploiement Oracle, ni modification des services, réseau, secrets, historiques,
 workspaces ou exports de phase P. La spécification V4 reste expérimentale ; les
 décisions explicites de cette mission priment sur ses questions encore ouvertes.
+
+### Exception bornée : campagne scientifique V4 durable et instance Oracle privée
+
+Cette mission autorise le panel de sept familles V4, protocole, mesures, stockage,
+API, interface, outils et campagnes bornées, puis la fusion après contrôles sans
+revue manuelle intermédiaire. Une nouvelle instance Oracle privée indépendante
+est autorisée sous `opc`, sans sudo, exclusivement en boucle locale et via SSH,
+si un accès existe ; sinon livrer un bloc opérateur. Ne modifier aucun dossier,
+script, marqueur ou export de phase P, ni services actifs, portail, Caddy, réseau,
+historiques ou comptes système. Cette exception est propre à la présente mission
+et remplace son interdiction Oracle de la première mission V4, sans l'étendre.

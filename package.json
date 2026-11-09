@@ -12,7 +12,11 @@
     "lint": "tsc --noEmit",
     "test": "TSX_DISABLE_CACHE=1 node --import tsx --test tests/*.test.ts",
     "dev:v4": "tsx scripts/v4-dev.ts",
-    "demo:v4": "tsx scripts/v4-demo.ts"
+    "demo:v4": "tsx scripts/v4-demo.ts",
+    "pilot:v4": "tsx scripts/v4-study-pilot.ts",
+    "backup:v4": "tsx scripts/v4-study-backup.ts",
+    "release:v4": "tsx scripts/v4-release.ts",
+    "private:v4": "NODE_ENV=production tsx scripts/v4-private-server.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

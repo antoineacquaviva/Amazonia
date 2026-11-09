@@ -38,6 +38,7 @@ try {
   await page
     .getByRole("link", { name: "V4 expérimentale", exact: true })
     .click();
+  await page.getByLabel("Version d’utilisation V4").selectOption("legacy");
   await page.getByLabel("Positions par piste").fill("8");
   await page.getByRole("alert").filter({ hasText: "Fin de piste" }).waitFor();
   assert(
@@ -86,6 +87,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator("select").first().selectOption("dashboard");
   await page.locator("select").first().selectOption("v4");
+  await page.getByLabel("Version d’utilisation V4").selectOption("legacy");
   await page
     .getByRole("heading", { name: "Amazonia V4 — essai expérimental" })
     .waitFor();

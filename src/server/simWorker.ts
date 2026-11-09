@@ -1,3 +1,9 @@
+import {
+  provenance as scienceProvenance,
+  compatible as scienceCompatible,
+} from "../v4science/protocol";
+import { runScience } from "../v4science/runner";
+import type { ScienceRequest, ScienceResponse } from "../v4science/types";
 import { runV4 } from "../v4/engine";
 import type { V4Config, GameResult, Provenance } from "../v4/types";
 import { runScientificGame } from "../scientific/runner";
@@ -72,18 +78,33 @@ export interface V4WorkerResponse {
   result: GameResult;
 }
 export type WorkerRequestMessage =
+  | ScienceRequest
   | V4WorkerRequest
   | EvalBatchWorkerRequest
   | StressBatchWorkerRequest;
 
 export type WorkerResponseMessage =
+  | ScienceResponse
   | V4WorkerResponse
   | EvalBatchWorkerResponse
   | StressBatchWorkerResponse;
 
 if (parentPort) {
   parentPort.on("message", (msg: WorkerRequestMessage) => {
-    if (msg.type === "RUN_V4") {
+    if (msg.type === "RUN_V4_SCIENCE") {
+      if (!scienceCompatible(msg.provenance, scienceProvenance()))
+        throw new Error(
+          "Sources ou runtime V4 modifiés ; redémarrer une instance compatible",
+        );
+      const samples = msg.jobs.map((job) =>
+        runScience(msg.plan, job, msg.provenance),
+      );
+      parentPort?.postMessage({
+        taskId: msg.taskId,
+        type: "RUN_V4_SCIENCE_RESULT",
+        samples,
+      } satisfies ScienceResponse);
+    } else if (msg.type === "RUN_V4") {
       const result = runV4(msg.config, msg.seed, msg.trace);
       result.provenance = msg.provenance;
       parentPort?.postMessage({

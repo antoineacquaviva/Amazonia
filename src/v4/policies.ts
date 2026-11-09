@@ -10,19 +10,28 @@ import type {
 } from "./types";
 export const REVISION_SWEEPS = 2;
 type Hypothesis = { draw: Draw; probability: number };
-export function rollBeliefs(o: Observation): Hypothesis[][] {
+export function rollBeliefs(
+  o: Observation & { privilegedRolls?: Draw[] },
+): Hypothesis[][] {
   return o.board.forests.map((f) =>
-    o.personalRoll?.roller === f.player
-      ? [{ draw: o.personalRoll, probability: 1 }]
-      : Array.from({ length: 36 }, (_, i) => ({
-          draw: resolveDraw(
-            f.player,
-            Math.floor(i / 6) + 1,
-            (i % 6) + 1,
-            o.board.eyeOrder,
-          ),
-          probability: 1 / 36,
-        })),
+    o.privilegedRolls?.find((d) => d.roller === f.player)
+      ? [
+          {
+            draw: o.privilegedRolls.find((d) => d.roller === f.player)!,
+            probability: 1,
+          },
+        ]
+      : o.personalRoll?.roller === f.player
+        ? [{ draw: o.personalRoll, probability: 1 }]
+        : Array.from({ length: 36 }, (_, i) => ({
+            draw: resolveDraw(
+              f.player,
+              Math.floor(i / 6) + 1,
+              (i % 6) + 1,
+              o.board.eyeOrder,
+            ),
+            probability: 1 / 36,
+          })),
   );
 }
 /** Exact small distribution of (power, engaged A/B) at a cell, based only on the observation. */

@@ -77,3 +77,12 @@ l'environnement. Les bots n'y consomment rien. Une même graine produit donc les
 mêmes dés par joueur/tour entre variantes ; les cibles peuvent changer avec
 l'Œil. Ce flux est distinct du protocole scientifique SHA256 V1 et n'est pas
 présenté comme ce protocole. Graine zéro refusée pour éviter l'alias historique.
+
+## Extension autorisée : étude scientifique durable
+
+La mission suivante ajoute sept familles et le protocole `V4_SCIENTIFIC_1`, sans
+modifier les règles de résolution ni les huit variantes. La politique unique
+ci-dessus reste celle du premier lot. Le panel, les contrats d'information, la
+même convention de deux balayages pour les familles révisables et les familles
+sans révision sont documentés dans [V4_SCIENTIFIC.md](../docs/V4_SCIENTIFIC.md).
+Les objectifs sont évalués par axes séparés, sans note globale non validée.

@@ -1,3 +1,4 @@
+import { V4ScienceView } from "./V4ScienceView";
 import React, { useEffect, useState } from "react";
 import { buildApiUrl } from "../api";
 import { DEFAULT_V4_CONFIG, type V4Config } from "../v4/types";
@@ -17,7 +18,7 @@ async function request<T>(
   if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
   return data;
 }
-export function V4View() {
+export function LegacyV4View() {
   const [config, setConfig] = useState<V4Config>(
       structuredClone(DEFAULT_V4_CONFIG),
     ),
@@ -363,4 +364,9 @@ export function V4View() {
       )}
     </section>
   );
+}
+
+export function V4View(){
+ const [mode,setMode]=useState('science');
+ return <div className="space-y-4"><label>Version d’utilisation V4 <select className="border rounded p-2 bg-white text-slate-900" value={mode} onChange={e=>setMode(e.target.value)}><option value="science">Campagne scientifique durable</option><option value="legacy">Démonstration initiale à bot unique</option></select></label>{mode==='science'?<V4ScienceView/>:<LegacyV4View/>}</div>;
 }
