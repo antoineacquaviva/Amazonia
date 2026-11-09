@@ -60,6 +60,7 @@ def free_port(requested=None):
     need(port == 0 or 1024 <= port <= 65535, 'PORT_RANGE')
     try:
         with socket.socket() as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(('127.0.0.1', port))
             return sock.getsockname()[1]
     except OSError:

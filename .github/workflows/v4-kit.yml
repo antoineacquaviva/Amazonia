@@ -25,3 +25,10 @@ jobs:
       - run: python3 -B -m unittest discover -s tests/kit -v
       - run: npm run lint && npm test && npm run build
       - run: python3 -B tests/kit/integration.py
+      - name: Browser scientific workflow
+        run: |
+          npm install --prefix "$RUNNER_TEMP/v4-browser" --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/v4-browser/node_modules/.bin/playwright" install chromium
+          export V4_PLAYWRIGHT_PACKAGE="$RUNNER_TEMP/v4-browser/package.json"
+          export V4_CHROMIUM="$(node -e 'console.log(require(process.argv[1]).chromium.executablePath())' "$RUNNER_TEMP/v4-browser/node_modules/playwright")"
+          node --import tsx scripts/v4-study-ui-test.ts

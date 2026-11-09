@@ -56,6 +56,7 @@ with tempfile.TemporaryDirectory(prefix='v4-kit-real-') as scratch:
         # Real collision, not a mock: starting must leave the listener alone.
         import socket
         with socket.socket() as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(('127.0.0.1', int(config['V4_PORT'])))
             sock.listen()
             assert subprocess.run([str(instance / 'control.sh'), 'start']).returncode != 0
