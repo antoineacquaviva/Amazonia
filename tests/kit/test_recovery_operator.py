@@ -1,4 +1,5 @@
 """Recovery safety contracts with synthetic files and no host privilege."""
+import ast
 import contextlib
 import copy
 import importlib.util
@@ -131,6 +132,36 @@ class OperatorTests(unittest.TestCase):
         with patch.object(m,'sudo') as run, contextlib.redirect_stdout(io.StringIO()):
             m.Recovery().fail()
             run.assert_not_called()
+
+    def test_published_bootstrap_refuses_corruption_before_execution(self):
+        doc=(ROOT/'docs/ORACLE_RECOVERY_RUN.md').read_text()
+        script=doc.split("python3 - <<'PY'\n",1)[1].split('\nPY\n',1)[0]
+        ast.parse(script)
+        for corrupt in (False,True):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as directory:
+                def response(url,timeout):
+                    name=url.rsplit('/',1)[1]
+                    data=(ROOT/'scripts'/name).read_bytes()
+                    if corrupt and name=='oracle-recovery-caddy.py': data+=b'corruption'
+                    return contextlib.closing(io.BytesIO(data))
+                old_umask=os.umask(0o077)
+                try:
+                    with patch('pathlib.Path.home',return_value=Path('/home/opc')), \
+                         patch('os.geteuid',return_value=1000), \
+                         patch('tempfile.mkdtemp',return_value=directory), \
+                         patch('urllib.request.urlopen',side_effect=response), \
+                         patch('os.execv') as execute:
+                        if corrupt:
+                            with self.assertRaises(SystemExit): exec(compile(script,'bootstrap','exec'),{})
+                            execute.assert_not_called()
+                        else:
+                            exec(compile(script,'bootstrap','exec'),{})
+                            execute.assert_called_once()
+                            self.assertEqual(execute.call_args.args[1][-1],'--apply-approved')
+                            self.assertEqual((Path(directory)/'oracle-recover.py').read_bytes(),
+                                             (ROOT/'scripts/oracle-recover.py').read_bytes())
+                finally:
+                    os.umask(old_umask)
 
     def test_default_mode_never_activates(self):
         with patch('sys.argv',['oracle-recover.py']), patch.object(m.Recovery,'preflight'), \
