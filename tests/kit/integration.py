@@ -24,15 +24,16 @@ with tempfile.TemporaryDirectory(prefix='v4-kit-real-') as scratch:
     parent = Path(scratch)
     bundle = parent / 'kit.tar.gz'
     subprocess.run(['python3', '-B', str(ROOT / 'scripts/v4-kit-build.py'), str(bundle)], cwd=ROOT, check=True)
-    # A published kit must contain exactly the tested runtime sources, independently
-    # of the later commit that adds the binary and documentation.
-    current_meta, current_files, _ = read_kit(bundle, digest(bundle.read_bytes()))
+    # Published immutable kits are checked against THEIR Git commit, not future code.
+    # A server fix must not invalidate a previously distributed private release.
     for published in (ROOT / 'distribution').glob('*.tar.gz'):
         expected = Path(str(published) + '.sha256').read_text().split()[0]
         published_meta, published_files, _ = read_kit(published, expected)
-        assert published_meta['sourceHash'] == current_meta['sourceHash']
-        assert {k:v for k,v in published_files.items() if k != '.release.json'} == \
-               {k:v for k,v in current_files.items() if k != '.release.json'}
+        commit = published_meta['commit']
+        for name, content in published_files.items():
+            if name != '.release.json':
+                original = subprocess.check_output(['git', 'show', commit + ':' + name], cwd=ROOT)
+                assert content == original, 'Published source differs from its Git commit'
     node, npm, env = installer.runtime(shutil.which('node'))
     instance = None
     foreign = None

@@ -2,12 +2,15 @@ name: V4 source kit and private installation
 on:
   pull_request:
     paths:
+      - 'server.ts'
+      - 'src/**'
+      - 'tests/**'
       - 'scripts/**'
       - 'tests/kit/**'
       - '.github/workflows/v4-kit.yml'
       - 'package*.json'
   push:
-    branches: [mission/v4-oracle-github-kit]
+    branches: [mission/v4-oracle-github-kit, fix/oracle-portal-science-recovery]
 permissions:
   contents: read
 jobs:
@@ -18,6 +21,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.22.1'
@@ -32,3 +36,10 @@ jobs:
           export V4_PLAYWRIGHT_PACKAGE="$RUNNER_TEMP/v4-browser/package.json"
           export V4_CHROMIUM="$(node -e 'console.log(require(process.argv[1]).chromium.executablePath())' "$RUNNER_TEMP/v4-browser/node_modules/playwright")"
           node --import tsx scripts/v4-study-ui-test.ts
+      - name: Caddy recovery candidate, real proxy/auth fixtures
+        run: |
+          mkdir -p "$RUNNER_TEMP/caddy-recovery"
+          curl --fail --location --max-time 90 --output "$RUNNER_TEMP/caddy-recovery/caddy.tar.gz" https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz
+          echo "727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b  $RUNNER_TEMP/caddy-recovery/caddy.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/caddy-recovery/caddy.tar.gz" -C "$RUNNER_TEMP/caddy-recovery" caddy
+          CADDY_TEST_BINARY="$RUNNER_TEMP/caddy-recovery/caddy" python3 -B tests/kit/caddy_recovery_integration.py
