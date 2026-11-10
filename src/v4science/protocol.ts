@@ -106,6 +106,7 @@ export function provenance(): Provenance {
   const root = new URL("../../", import.meta.url),
     files = [
       "src/v4/engine.ts",
+      "src/v4/pressure.ts",
       "src/v4/types.ts",
       "src/v4/config.ts",
       "src/v4/policies.ts",
@@ -191,3 +192,4 @@ export function compatible(a: Provenance, b: Provenance) {
     { commit: bc, dirty: bd, ...y } = b;
   return digest(x) === digest(y);
 }
+
