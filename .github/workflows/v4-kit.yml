@@ -5,6 +5,7 @@ on:
       - 'server.ts'
       - 'src/**'
       - 'tests/**'
+      - 'docs/prototypes/**'
       - 'scripts/**'
       - 'tests/kit/**'
       - '.github/workflows/v4-kit.yml'
@@ -36,6 +37,7 @@ jobs:
           export V4_PLAYWRIGHT_PACKAGE="$RUNNER_TEMP/v4-browser/package.json"
           export V4_CHROMIUM="$(node -e 'console.log(require(process.argv[1]).chromium.executablePath())' "$RUNNER_TEMP/v4-browser/node_modules/playwright")"
           node --import tsx scripts/v4-study-ui-test.ts
+          node tests/ux/campaign-preview.cjs
       - name: Caddy recovery candidate, real proxy/auth fixtures
         run: |
           mkdir -p "$RUNNER_TEMP/caddy-recovery"

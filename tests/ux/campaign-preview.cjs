@@ -1,0 +1,47 @@
+const assert=require('node:assert/strict');
+const {createRequire}=require('node:module');
+const path=require('node:path');
+const {pathToFileURL}=require('node:url');
+const requireBrowser=createRequire(process.env.V4_PLAYWRIGHT_PACKAGE||path.resolve('package.json'));
+const {chromium}=requireBrowser('playwright');
+(async()=>{
+ const browser=await chromium.launch({executablePath:process.env.V4_CHROMIUM||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
+ try{
+ const page=await browser.newPage({viewport:{width:1360,height:1000}}),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ let external=0;page.on('request',r=>{if(/^https?:/.test(r.url()))external++;});
+ await page.goto(pathToFileURL(path.resolve('docs/prototypes/campagne-v4.html')).href);
+ assert.equal(await page.locator('#total').innerText(),'14\u202f336');
+ await page.getByRole('button',{name:'Préparer ma campagne',exact:true}).click();
+ await page.locator('#review').waitFor({state:'visible'});
+ assert.match(await page.locator('#feedback').innerText(),/Plan préparé/);
+ await page.locator('#orders').selectOption('all');
+ assert.equal(await page.locator('#review').isVisible(),false);
+ assert.equal((await page.locator('#total').innerText()).replace(/\D/g,''),'3118080');
+ await page.locator('#orders').selectOption('rotations');
+ assert.equal((await page.locator('#total').innerText()).replace(/\D/g,''),'64512');
+ await page.locator('#name').fill('');
+ await page.locator('#prepare').click();
+ assert.match(await page.locator('#feedback').innerText(),/Donnez un nom/);
+ await page.locator('#name').fill('Essai de maquette');
+ await page.locator('#prepare').click();
+ const download=page.waitForEvent('download');await page.locator('#manifest').click();
+ assert.equal((await download).suggestedFilename(),'maquette-plan-amazonia.json');
+ await page.locator('#illustrate').click();
+ assert.equal(await page.locator('#suivi').isVisible(),true);
+ await page.locator('#demoPause').click();
+ assert.match(await page.locator('#pauseFeedback').innerText(),/suspension prise en compte/);
+ await page.getByRole('tab',{name:'3. Comprendre'}).click();
+ assert.equal(await page.locator('#variant option').count(),8);
+ assert.equal(await page.locator('#eyeExample').innerText(),'Après : B, A, D, C');
+ await page.locator('#variant').selectOption('4');
+ assert.equal(await page.locator('#eyeExample').innerText(),'Après : B, D, A, C');
+ assert.match(await page.locator('#comprendre').innerText(),/Recommandation : en attente/);
+ await page.setViewportSize({width:390,height:844});
+ await page.getByRole('tab',{name:'1. Préparer'}).click();
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'mobile overflow');
+ assert.equal(external,0,'prototype must never call Oracle or a network API');
+ assert.deepEqual(errors,[]);
+ console.log('UX_PREVIEW_OK: plan, invalidation, visible feedback, exports, rules examples, mobile, zero real requests');
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1)});
