@@ -96,3 +96,8 @@ Le correctif du refus 203/EXEC peut créer une copie isolée et vérifiée du se
 binaire Node sous un nouveau /usr/local/bin/amazonia-runtime-*/node et appliquer
 restorecon uniquement à cette copie. Ne modifier aucun Node/lien global, fichier
 P ou politique SELinux. La sonde systemd sous opc précède toute activation.
+
+Dans ce même lot, les fichiers d'environnement et la copie de clé peuvent être
+installés dans un nouveau /etc/amazonia-recovery-* avec permissions privées et
+restorecon restreint. La reprise lg0r36_7 réutilise code et secrets existants après
+contrôle de l'état arrêté ; ne pas relancer une installation neuve sur cet état.
