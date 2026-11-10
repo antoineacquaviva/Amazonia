@@ -266,3 +266,32 @@ test("SIGKILL leaves an unconfirmed batch replayable only after explicit resume"
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "parallel V4 wave uses two workers and commits identical ordered results",
+  { skip: os.availableParallelism() < 3 },
+  async () => {
+    const parallel = temp(),
+      sequential = temp();
+    const a = new StudyManager({
+        root: parallel,
+        batchSize: 2,
+        pool: { workers: 2 },
+      }),
+      b = new StudyManager({ root: sequential, batchSize: 2 });
+    try {
+      const p = plan();
+      const x = a.start(p);
+      assert.equal(a.pool.stats.busyWorkers, 2);
+      const y = b.start(p);
+      await until(() => !a.busy && !b.busy);
+      assert.equal(a.get(x.id).status, "COMPLETED");
+      assert.deepEqual(a.samples(x.id), b.samples(y.id));
+    } finally {
+      await a.close();
+      await b.close();
+      for (const root of [parallel, sequential])
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

@@ -1,3 +1,4 @@
+import { diagnostics } from "./diagnostics";
 import { Router, type Response } from "express";
 import { once } from "node:events";
 import { StudyManager } from "./manager";
@@ -110,8 +111,15 @@ export function scienceRoutes(getManager: () => StudyManager) {
             trace: sample.trace,
           };
         });
+        const metricsByAxis = await diagnostics(
+          m,
+          p,
+          checkpoints.map((s) => s?.completed ?? 0),
+          () => res.destroyed,
+        );
         res.json({
           ...report,
+          metricsByAxis,
           documents: checkpoints.find(Boolean)?.documentSnapshots ?? {},
           witnesses,
           metrics: {

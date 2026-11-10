@@ -163,6 +163,12 @@ export function V4ProgramView() {
             {selected.completed.toLocaleString("fr-FR")} /{" "}
             {selected.total.toLocaleString("fr-FR")} parties
           </h2>
+          {selected.status === "RUNNING" && (
+            <p>
+              Calcul V4 sur la VM · {selected.resources.busyWorkers} /{" "}
+              {selected.resources.workersCount} workers actifs
+            </p>
+          )}
           <progress value={selected.completed} max={selected.total} />
           <p>
             {selected.table} {selected.reason}
