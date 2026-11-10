@@ -231,6 +231,7 @@ export class StudyManager {
       completed:
         p.parts.slice(0, p.index).reduce((n, x) => n + totalJobs(x.plan), 0) +
         Number(row?.n ?? 0),
+      resources: this.pool.stats,
       table: current?.plan.name,
       studies: p.parts.length,
     };
@@ -418,7 +419,11 @@ export class StudyManager {
         const s = this.get(id);
         if (s.status !== "RUNNING") return;
         const start = s.cursor,
-          count = Math.min(s.batchSize, s.total - start),
+          lanes = Math.max(
+            1,
+            Math.floor(this.pool.options.workers / this.limits.maxActive),
+          ),
+          count = Math.min(lanes * s.batchSize, s.total - start),
           jobs = Array.from({ length: count }, (_, i) =>
             jobAt(s.plan, start + i),
           );
@@ -431,27 +436,49 @@ export class StudyManager {
             .run(id, start, count, requestHash),
         );
         const begun = performance.now();
-        const response = await this.pool.run(
-          {
-            taskId: start,
-            type: "RUN_V4_SCIENCE",
-            plan: s.plan,
-            provenance: s.provenance,
-            jobs,
-          },
-          () => {},
-          () => this.closed || this.get(id).status === "STOPPED",
-        );
-        if (
-          response.type !== "RUN_V4_SCIENCE_RESULT" ||
-          response.samples.length !== count
-        )
-          throw new Error("Réponse de lot V4 incorrecte");
+        const free = fs.statfsSync(this.options.root);
+        if (free.bavail * free.bsize < 512 * 1024 * 1024)
+          throw new Error(
+            "Espace libre inférieur à 512 Mio ; reprendre après libération d’espace",
+          );
+        const tasks = [];
+        for (let offset = 0; offset < count; offset += s.batchSize) {
+          const slice = jobs.slice(offset, offset + s.batchSize);
+          tasks.push(
+            this.pool
+              .run(
+                {
+                  taskId: start + offset,
+                  type: "RUN_V4_SCIENCE",
+                  plan: s.plan,
+                  provenance: s.provenance,
+                  jobs: slice,
+                },
+                () => {},
+                () => this.closed || this.get(id).status === "STOPPED",
+              )
+              .then((result) => {
+                if (
+                  result.type !== "RUN_V4_SCIENCE_RESULT" ||
+                  result.samples.length !== slice.length
+                )
+                  throw new Error("Réponse de lot V4 incorrecte");
+                return result.samples;
+              }),
+          );
+        }
+        // Wait for every lane before a retry. Settlement order cannot change job identities.
+        const results = await Promise.allSettled(tasks);
+        const samples: Sample[] = [];
+        for (const result of results) {
+          if (result.status === "rejected") throw result.reason;
+          samples.push(...result.value);
+        }
         const now = this.get(id);
         if (this.closed || now.status === "STOPPED") return;
         if (now.cursor !== start || now.manifestHash !== s.manifestHash)
           throw new Error("Génération ou curseur modifié");
-        response.samples.forEach((sample, i) => {
+        samples.forEach((sample, i) => {
           validateSample(sample, s.plan);
           const j = jobs[i];
           if (
@@ -465,7 +492,7 @@ export class StudyManager {
         this.options.beforeCheckpoint?.();
         this.store.transaction(() => {
           for (let i = 0; i < count; i++) {
-            const sample = response.samples[i];
+            const sample = samples[i];
             // Final boards are redundant outside trace witnesses; retain all unit measures/events for comparisons/replay.
             const stored = jobs[i].trace
               ? sample

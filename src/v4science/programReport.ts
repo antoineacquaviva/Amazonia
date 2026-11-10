@@ -143,6 +143,7 @@ export function programReport(m: StudyManager, p: Program) {
       );
       return {
         ...c,
+        configId: digest(c.config),
         variant: variant(c.config),
         rules: describe(c.config),
         lossEstimate: meanEstimate(
@@ -160,6 +161,36 @@ export function programReport(m: StudyManager, p: Program) {
                 assumptions,
                 complete && solo?.size === c.planned,
               ),
+        ruleEffects: (
+          ["eyeMode", "stealthCapacity", "sabotageMode"] as const
+        ).flatMap((axis) => {
+          const [baseline, alternative] = {
+            eyeMode: ["ONE_STEP", "FULL_CAPTURE"],
+            stealthCapacity: ["SINGLE", "MULTIPLE"],
+            sabotageMode: ["ONE_MACHINE", "BOTH_MACHINES"],
+          }[axis];
+          if (c.config[axis] !== alternative) return [];
+          const reference = { ...c.config, [axis]: baseline };
+          const other = units.get(digest(reference) + c.family);
+          const differences = Array.from(own, ([pair, loss]) =>
+            other?.has(pair) ? other.get(pair)! - loss : null,
+          );
+          const estimate = meanEstimate(
+            differences,
+            [-stock, stock],
+            assumptions,
+            complete && other?.size === c.planned,
+          );
+          return [
+            {
+              axis,
+              baseline,
+              alternative,
+              referenceId: digest(reference),
+              extraTreesPreserved: estimate,
+            },
+          ];
+        }),
         meanLoss: c.observed ? c.lossSum / c.observed : null,
         missing: c.planned - c.observed,
         reason: c.observed === c.planned ? null : p.reason || p.status,
