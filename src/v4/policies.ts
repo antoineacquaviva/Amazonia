@@ -1,3 +1,4 @@
+import { blockedMask, redirect, pursuitTargets, type PressureRules } from "./pressure";
 import { resolveDraw } from "./engine";
 import { observe, type Observation } from "./observations";
 import type {
@@ -69,9 +70,13 @@ function attackDistribution(
     return { power, mask, q };
   });
 }
-export function chooseAction(o: Observation): Action {
+export function chooseAction(o: Observation, pressure?: PressureRules): Action {
   const beliefs = rollBeliefs(o),
     cache = new Map<string, number>();
+  if (pressure?.pursuit && o.board.turn >= 3) {
+    const targets = pursuitTargets(o.board);
+    for (const rolls of beliefs) for (const h of rolls) h.draw = redirect(h.draw, targets);
+  }
   const score = (a: Action) => {
     const key = `${a.target}:${a.cell}:${a.mode}:${a.sabotageChoice}`;
     if (cache.has(key)) return cache.get(key)!;
@@ -90,6 +95,17 @@ export function chooseAction(o: Observation): Action {
         a.cell,
       ))
         if (power > 0) {
+          if (pressure?.partialSabotage && o.board.turn >= 3 && mask === 3) {
+            const sabotage = f.machines.reduce((bits, m) =>
+              m.sabotage ? bits | (m.kind === "A" ? 1 : 2) : bits, 0);
+            const before = blockedMask(mask, power, existing, c.trap, sabotage, true);
+            const after = blockedMask(mask, power, existing + 1, c.trap, sabotage, true);
+            for (const [bit, damage] of [[1, c.trees > 0 ? 0.65 : 0], [2, c.stumps > 0 ? 1 : 0]]) {
+              if (!(before & bit)) value += q * damage *
+                (after & bit ? 1 : 0.12 / (power + 1 - existing));
+            }
+            continue;
+          }
           const token =
             c.trap ||
             f.machines.some(

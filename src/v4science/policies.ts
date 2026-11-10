@@ -1,3 +1,4 @@
+import type { PressureRules } from "../v4/pressure";
 import { chooseAction } from "../v4/policies";
 import { DecisionRandom } from "../scientific/random";
 import type {
@@ -17,6 +18,7 @@ import { NEGOTIATION, POLICY_VERSIONS, type Family, type Plan } from "./types";
 export function panelChoose(
   o: PanelObservation | PrivilegedObservation,
   random: DecisionRandom,
+  pressure?: PressureRules,
 ) {
   if (o.family === "BLIND") {
     // Legal actions only: no dice, board heuristics, probabilities or partner signals.
@@ -29,7 +31,7 @@ export function panelChoose(
       a.sabotageChoice = random.nextInt(0, 1) ? "A" : "B";
     return a;
   }
-  return chooseAction(o as unknown as Parameters<typeof chooseAction>[0]);
+  return chooseAction(o as unknown as Parameters<typeof chooseAction>[0], pressure);
 }
 export function panelProgram(
   board: Board,
@@ -39,6 +41,8 @@ export function panelProgram(
   plan: Pick<Plan, "experimentSeed" | "policySeed">,
   seed: number,
   decisionBurn = 0,
+  combatOpening = false,
+  pressure?: PressureRules,
 ) {
   const placements: Placement[] = [],
     decisions: DecisionEvent[] = [];
@@ -73,7 +77,10 @@ export function panelProgram(
       POLICY_VERSIONS[family],
     ]);
     for (let i = 0; i < decisionBurn; i++) random.nextInt(0, 1000);
-    const action = { ...panelChoose(o, random), owner, step };
+    const observation = combatOpening && board.turn === 1 && step === 1
+      ? { ...o, legalActions: o.legalActions.filter(action => action.mode === "COMBAT") }
+      : o;
+    const action = { ...panelChoose(observation, random, pressure), owner, step };
     placements.push(action);
     decisions.push({ owner, phase, round, action: { ...action } });
   };

@@ -1,3 +1,4 @@
+import { blockedMask, redirect, pursuitTargets, type PressureRules } from "./pressure";
 import { resolveTargetPlayerRank1Based } from "../sim/i18n";
 import { SeededRNG } from "../sim/rng";
 import { validateSeed, validateV4Config } from "./config";
@@ -151,6 +152,7 @@ export function resolveTurn(
   draws: Draw[],
   placements: Placement[],
   decisions: DecisionEvent[] = [],
+  pressure?: PressureRules,
 ): TurnTrace {
   validatePlacements(board, config, placements);
   if (
@@ -165,6 +167,10 @@ export function resolveTurn(
     )
   )
     throw new Error("Lancers incohérents");
+  if (pressure?.pursuit && board.turn >= 3) {
+    const targets = pursuitTargets(board);
+    draws = draws.map(d => redirect(d, targets));
+  }
   const trace: TurnTrace = {
     turn: board.turn,
     eyeBefore: [...board.eyeOrder],
@@ -231,19 +237,21 @@ export function resolveTurn(
           .filter((m) => m.sabotage)
           .map((m) => m.kind),
         trapConsumed = cell.trap;
-      const parried =
-        defenders > power ||
-        (defenders >= 1 && (cell.trap || sabotageConsumed.length > 0));
+      const mask = machines.reduce((bits, m) => bits | (m.kind === "A" ? 1 : 2), 0);
+      const sabotage = sabotageConsumed.reduce((bits, kind) => bits | (kind === "A" ? 1 : 2), 0);
+      const blocked = blockedMask(mask, power, defenders, cell.trap, sabotage,
+        !!pressure?.partialSabotage && board.turn >= 3);
+      const parried = blocked === mask;
       const oldStumps = cell.stumps;
       let cut = 0,
         cleared = 0;
       if (!parried) {
-        if (machines.some((m) => m.kind === "A") && cell.trees > 0) {
+        if ((mask & 1) && !(blocked & 1) && cell.trees > 0) {
           cell.trees--;
           cell.stumps++;
           cut = 1;
         }
-        if (machines.some((m) => m.kind === "B")) {
+        if ((mask & 2) && !(blocked & 2)) {
           cleared = oldStumps;
           cell.stumps -= oldStumps;
         }
