@@ -120,6 +120,7 @@ def main():
     cp=stage/'candidate'
     run('git','clone','--quiet','--no-local','--no-hardlinks',ROOT,cp)
     require(output('git','-C',cp,'rev-parse','HEAD')==sha,'Révision candidate incorrecte')
+    run('git','-C',cp,'remote','set-url','origin','https://github.com/antoineacquaviva/Amazonia.git')
     # Keep historical Node/npm and its configuration files untouched.
     buildenv={**os.environ,'PATH':str(RUNTIME)+':'+os.environ['PATH'],'NODE_ENV':'production'}
     for name in ('USERCONFIG','GLOBALCONFIG'):
