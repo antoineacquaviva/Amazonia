@@ -2,7 +2,9 @@
 
 État attendu : Amazonia arrêté, portail et voisins actifs, versions et historiques
 exactement décrits dans ORACLE_RECOVERY_PLAN.md. Un écart provoque un arrêt,
-pas une réparation improvisée. La phase P reste inchangée.
+pas une réparation improvisée. La phase P reste inchangée. Ce bloc est réservé à un état initial intact,
+avec anciens commits et aucun drop-in de récupération. Si l'échange du code a
+déjà eu lieu, employer la reprise ciblée ORACLE_RECOVERY_RESUME.md, jamais ce bloc.
 
 Dans le terminal SSH habituel connecté sous `opc`, coller ce bloc une seule fois.
 Le prompt sudo habituel peut apparaître. La préparation peut prendre plusieurs
@@ -14,8 +16,10 @@ Il crée une copie root:root 0755 du seul binaire Node préparé dans un nouveau
 dossier /usr/local/bin/amazonia-runtime-*/node, compare les empreintes, applique
 restorecon uniquement à ce nouveau dossier puis teste cette copie sous systemd.
 Le Node système, les liens globaux, les comptes et les artefacts P ne changent pas.
-La tentative précédente arrêtée avant activation reste conservée ; ce nouveau
-bloc utilise un nouveau dossier et refait ses contrôles, sans reprendre à l'aveugle.
+Les fichiers d'environnement sont installés root:root 0600 et la clé opc:opc 0400
+dans un nouveau /etc/amazonia-recovery-*, root:opc 0750. restorecon ne vise que
+ce dossier. Les drop-ins pointent vers ces fichiers ; deux sondes systemd testent
+leur lecture et celle de la clé avant de changer les unités applicatives.
 
 ```sh
 python3 - <<'PY'
@@ -25,9 +29,9 @@ if os.geteuid() == 0 or Path.home() != Path('/home/opc'):
     raise SystemExit('Utiliser la session opc habituelle, sans sudo devant python3.')
 os.umask(0o077)
 dest = Path(tempfile.mkdtemp(prefix='amazonia-recovery-download-', dir=Path.home()))
-base = 'https://raw.githubusercontent.com/antoineacquaviva/Amazonia/db5c861663631c2951ceade8acf0065794725b47/scripts/'
+base = 'https://raw.githubusercontent.com/antoineacquaviva/Amazonia/d1157e7cc8e37d500fcf700964e5b448e7dd2c89/scripts/'
 files = {
-    'oracle-recover.py': 'f0f7e1a797f528d7db97e0b1fb7e6cd04a6024d580c2f40d314c92ebc05d0ce8',
+    'oracle-recover.py': '1d72a4a000034787c6eb1daa1169c53a3a253df3fa8e5ebe7fdfc9bc213fc366',
     'oracle-recovery-caddy.py': '3b79020bd1116c96570d40bda28c4e49fcfb8a964267d624ab573c75f567f2b8',
 }
 for name, expected in files.items():

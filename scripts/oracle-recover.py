@@ -187,6 +187,24 @@ def env_text(values):
         lines.append(key+'='+str(value))
     return '\n'.join(lines)+'\n'
 
+def service_config_path(stage):
+    need(stage.name.startswith('amazonia-recovery-'),'SERVICE_CONFIG_ID')
+    run_id=stage.name.removeprefix('amazonia-recovery-')
+    need(re.fullmatch(r'[a-z0-9_]+',run_id),'SERVICE_CONFIG_ID')
+    return Path('/etc')/('amazonia-recovery-'+run_id)
+
+def config_values(node, stage, key_file):
+    common={'NODE_ENV':'production','NODE_OPTIONS':'--max-old-space-size=512',
+            'PATH':str(node.parent)+':'+SYSTEM_PATH,
+            'ATELIER_INTERNAL_KEY_FILE':str(key_file),'ATELIER_PUBLIC_ORIGINS':ORIGINS}
+    return {
+        'amazonia':{**common,'PORT':'8083','AMAZONIA_CAMPAIGNS_DIR':str(stage/'data/campaigns'),
+            'V4_STUDIES_DIR':str(stage/'studies'),'V4_WORKERS':'1','V4_BATCH_SIZE':'2',
+            'V4_MAX_ACTIVE':'1','V4_MAX_GAMES':'2000','AMAZONIA_WORKERS':'1',
+            'AMAZONIA_QUEUE':'2','AMAZONIA_CAMPAIGNS':'1'},
+        'atelier-portail':{**common,'PORT':'3000','AMAZONIA_NODE_BINARY':'','AMAZONIA_CAMPAIGNS_DIR':''},
+    }
+
 def app_dropin(node, folder, file):
     for p in (node,folder,file):
         need(re.fullmatch(r'/[A-Za-z0-9_./-]+',str(p)), 'UNIT_PATH')
@@ -387,26 +405,58 @@ class Recovery:
         hashed=command([CADDY,'hash-password','--algorithm','bcrypt'],
                        stdin=(self.password+'\n').encode(),log=None).decode().strip()
         new_file(self.stage/'config/password-hash.private',hashed+'\n')
-        common={'NODE_ENV':'production','NODE_OPTIONS':'--max-old-space-size=512',
-                'PATH':str(self.node.parent)+':'+SYSTEM_PATH,
-                'ATELIER_INTERNAL_KEY_FILE':str(self.stage/'config/internal-key'),
-                'ATELIER_PUBLIC_ORIGINS':ORIGINS}
-        app_env={**common,'PORT':'8083','AMAZONIA_CAMPAIGNS_DIR':str(self.stage/'data/campaigns'),
-                 'V4_STUDIES_DIR':str(self.stage/'studies'),'V4_WORKERS':'1','V4_BATCH_SIZE':'2',
-                 'V4_MAX_ACTIVE':'1','V4_MAX_GAMES':'2000','AMAZONIA_WORKERS':'1',
-                 'AMAZONIA_QUEUE':'2','AMAZONIA_CAMPAIGNS':'1'}
-        # Refuse a future generic redeployment before it could mutate a checkout.
-        portal_env={**common,'PORT':'3000','AMAZONIA_NODE_BINARY':'','AMAZONIA_CAMPAIGNS_DIR':''}
-        for name,values in [('amazonia',app_env),('atelier-portail',portal_env)]:
+        self.service_config_dir=service_config_path(self.stage)
+        self.config_sources={}
+        for name,values in config_values(self.node,self.stage,self.service_config_dir/'internal-key').items():
             file=self.stage/'config'/(name+'.env')
             new_file(file,env_text(values))
+            self.config_sources[name]=file
             cwd=AMAZONIA if name=='amazonia' else PORTAL
-            new_file(self.stage/'config'/(name+'.conf'),app_dropin(self.node,cwd,file))
+            new_file(self.stage/'config'/(name+'.conf'),
+                     app_dropin(self.node,cwd,self.service_config_dir/(name+'.env')))
         candidate=helper().protect(self.caddy_before,'amazonia',hashed,self.key)
         new_file(self.stage/'config/caddy.private.json',canonical(candidate))
         run_id=self.stage.name.removeprefix('amazonia-recovery-')
         self.caddy_path=Path('/etc/caddy')/('amazonia-recovery-'+run_id+'.json')
         new_file(self.stage/'config/caddy.conf',caddy_dropin(self.caddy_path))
+
+    def install_service_configs(self):
+        self.progress('environnements-services-hors-home')
+        folder=self.service_config_dir
+        need(folder==service_config_path(self.stage),'SERVICE_CONFIG_PATH')
+        need(not folder.exists() and not folder.is_symlink(),'SERVICE_CONFIG_ALREADY_EXISTS')
+        trusted_directory(folder.parent)
+        sudo(['/usr/bin/install','-d','-o','root','-g','opc','-m','0750',folder],log=self.log)
+        for name,source in self.config_sources.items():
+            sudo(['/usr/bin/install','-o','root','-g','root','-m','0600',source,folder/(name+'.env')],log=self.log)
+        key=self.stage/'config/internal-key'
+        sudo(['/usr/bin/install','-o','opc','-g','opc','-m','0400',key,folder/'internal-key'],log=self.log)
+        sudo(['/usr/sbin/restorecon','-R',folder],log=self.log)
+        for source,target in [(s,folder/(n+'.env')) for n,s in self.config_sources.items()]+[(key,folder/'internal-key')]:
+            actual=sudo(['/usr/bin/sha256sum',target]).decode().split()[0]
+            need(actual==file_sha(source),'SERVICE_CONFIG_COPY_MISMATCH')
+        for name,port in [('amazonia',8083),('atelier-portail',3000)]:
+            self.progress('sonde-environnement-'+name)
+            probe='amazonia-env-probe-'+name+'-'+self.stage.name.removeprefix('amazonia-recovery-')
+            cwd=AMAZONIA if name=='amazonia' else PORTAL
+            try:
+                sudo(['/usr/bin/systemd-run','--unit='+probe,'--wait','--collect','--quiet',
+                    '--property=User=opc','--property=Group=opc',
+                    '--property=WorkingDirectory='+str(cwd),
+                    '--property=EnvironmentFile='+str(folder/(name+'.env')),
+                    '--property=StandardOutput=journal','--property=StandardError=journal',
+                    str(self.node),'--import','tsx','-e',
+                    'const f=require("node:fs");require("node:sqlite");'+
+                    'if(process.version!=="v24.22.1"||process.env.PORT!=="'+str(port)+'")process.exit(1);'+
+                    'if(!/^[a-f0-9]{64}$/.test(f.readFileSync(process.env.ATELIER_INTERNAL_KEY_FILE,"utf8").trim()))process.exit(1);'+
+                    'for(const k of ["V4_STUDIES_DIR","AMAZONIA_CAMPAIGNS_DIR"])if(process.env[k])f.accessSync(process.env[k],f.constants.R_OK|f.constants.W_OK|f.constants.X_OK);'+
+                    'console.log("AMAZONIA_SERVICE_ENV_OK")'],log=self.log)
+            except Stop:
+                try:
+                    sudo(['/usr/bin/journalctl','-u',probe+'.service','-n','40','--no-pager','-o','cat'],log=self.log)
+                except Stop:
+                    pass
+                raise Stop('SYSTEMD_SERVICE_ENV_PROBE_FAILED_BEFORE_START') from None
 
     def activate(self):
         self.progress('validation-et-activation-ciblée')
@@ -418,6 +468,8 @@ class Recovery:
         need(git_head(AMAZONIA)==OLD_AMAZONIA and git_head(PORTAL)==PORTAL_COMMIT,'CHECKOUT_CHANGED_DURING_PREPARATION')
         need(data_inventory(AMAZONIA/'data')==self.original,'DATA_CHANGED_BEFORE_ACTIVATION')
         refresh_sudo()
+        self.install_service_configs()
+        self.progress('validation-et-activation-ciblée')
         need(not self.caddy_path.exists() and not self.caddy_path.is_symlink(),'CADDY_TARGET_EXISTS')
         sudo(['/usr/bin/install','-o','root','-g','caddy','-m','0640',
               self.stage/'config/caddy.private.json',self.caddy_path],log=self.log)
@@ -434,12 +486,18 @@ class Recovery:
         self.backends_touched=True
         sudo(['/usr/bin/mv','--',AMAZONIA,self.stage/'retired-amazonia'],log=self.log)
         sudo(['/usr/bin/mv','--',self.prepared_code,AMAZONIA],log=self.log)
+        self.start_and_verify()
+
+    def start_and_verify(self):
         sudo(['/usr/bin/systemctl','daemon-reload'],log=self.log)
         for unit,cwd in [('amazonia.service',AMAZONIA),('atelier-portail.service',PORTAL)]:
-            raw=command(['/usr/bin/systemctl','show',unit,'--property=User,WorkingDirectory,ExecStart']).decode()
+            raw=command(['/usr/bin/systemctl','show',unit,'--property=User,WorkingDirectory,ExecStart,EnvironmentFiles']).decode()
             values=dict(line.split('=',1) for line in raw.splitlines() if '=' in line)
             need(values.get('User')=='opc' and values.get('WorkingDirectory')==str(cwd) and
                  ('path='+str(self.node)+' ') in values.get('ExecStart',''),'EFFECTIVE_UNIT_MISMATCH')
+            envfiles=re.findall(r'(\S+) \(ignore_errors=(yes|no)\)',values.get('EnvironmentFiles',''))
+            need(envfiles==[(str(self.service_config_dir/(unit.removesuffix('.service')+'.env')),'no')],
+                 'EFFECTIVE_ENVIRONMENT_FILE_MISMATCH')
         caddy_unit=command(['/usr/bin/systemctl','show','caddy.service','--property=ExecStart,ExecReload']).decode()
         need(caddy_unit.count(str(self.caddy_path))>=2,'CADDY_PERSISTENT_UNIT_MISMATCH')
         sudo(['/usr/bin/systemctl','restart','atelier-portail.service'],log=self.log)
@@ -482,7 +540,7 @@ class Recovery:
                 'neighborPortsUnchanged':[5050,8080,8082],
                 'caddyAndNeighborsSamePID':True,'v4StudyDir':str(self.stage/'studies'),
                 'legacyCampaignsCopy':str(self.stage/'data/campaigns'),
-                'genericAmazoniaDeployer':'BLOCKED_BEFORE_MUTATION',
+                'serviceConfigDir':str(self.service_config_dir),'genericAmazoniaDeployer':'BLOCKED_BEFORE_MUTATION',
                 'automaticCampaignStarted':False}
         new_file(self.stage/'report.json',json.dumps(result,indent=2)+'\n')
         self.progress('terminé')

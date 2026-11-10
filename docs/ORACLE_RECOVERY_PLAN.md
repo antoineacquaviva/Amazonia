@@ -216,3 +216,36 @@ pour diagnostic. La réussite sous systemd est une condition d'activation,
 pas une validation prétendue depuis CI. Les nouveaux tests couvrent copie
 identique, corruption refusée, collision, métadonnées et échec de sonde sans
 intervention sur les backends ; les commandes privilégiées sont simulées.
+
+## Refus de lecture des environnements et reprise ciblée lg0r36_7
+
+La tentative lg0r36_7 a sauvegardé l'existant, copié et testé Node, préparé le code
+et les secrets, validé/installé le candidat Caddy et les trois drop-ins, puis
+échangé le checkout Amazonia. Le redémarrage du portail a échoué avant lancement
+d'Amazonia et recharge Caddy : systemd rapporte « Failed to load environment
+files: Permission denied ». Le fichier privé existe, mode 0600, type user_home_t.
+Les deux backends ont été arrêtés par la procédure ; Caddy, LoRA et Forêt gardent
+leurs PID initiaux. Le candidat Caddy n'est pas chargé en mémoire.
+
+La correction installe les deux environnements root:root 0600 et une copie de
+la même clé opc:opc 0400 sous /etc/amazonia-recovery-<identifiant>, root:opc 0750.
+restorecon est limité à ce nouveau dossier ; aucune permission du HOME ni
+politique SELinux n'est changée. La clé et le mot de passe initiaux sont conservés.
+Des sondes sous opc avec EnvironmentFile et tsx testent version, SQLite, lecture
+de clé et accès aux stockages sans lancer de serveur ni de campagne. Les unités
+finales doivent déclarer exactement les nouveaux EnvironmentFiles obligatoires.
+
+scripts/oracle-resume.py vise seulement le dossier lg0r36_7. Il refuse toute
+réussite préalable, dérive de versions, de données, de fichiers privés/drop-ins,
+de configuration Caddy ou de PID voisin, un backend actif ou le dossier /etc
+cible déjà présent. Il relit le code de provenance, contrôle les empreintes,
+conserve le checkout et les historiques retirés, puis modifie uniquement les deux
+drop-ins applicatifs après les sondes. La reprise partage la recette de démarrage
+et d'authentification du script principal : aucune réinstallation, échange de
+code, génération de secret ou nouvelle campagne. Les preuves et journaux de
+reprise sont nouveaux ; l'ancien échec n'est pas écrasé. Un échec après modification
+des drop-ins arrête les deux backends et ne rétablit jamais le frontal ouvert.
+
+Le guide ORACLE_RECOVERY_RESUME.md fournit le bloc de reprise épinglé pour le
+propriétaire. Les contrôles locaux/CI ne remplacent pas les sondes effectives
+Oracle. Le script principal est également corrigé pour les futurs états initiaux.
