@@ -27,7 +27,7 @@ import { Sun, Moon, RefreshCw, Cpu, AlertTriangle } from 'lucide-react';
 type ActiveTab = 'dashboard' | 'builder' | 'stress' | 'journals' | 'v4';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('v4');
   const [darkMode, setDarkMode] = useState<boolean>(false);
 
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
@@ -225,10 +225,10 @@ export default function App() {
         {/* Zone 3 : 1 primary action */}
         <div className="flex items-center gap-3 shrink-0">
           <button
-            onClick={() => setActiveTab('builder')}
+            onClick={() => setActiveTab('v4')}
             className="px-4 py-2 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Nouvelle Campagne
+            Campagne V4
           </button>
         </div>
       </header>
