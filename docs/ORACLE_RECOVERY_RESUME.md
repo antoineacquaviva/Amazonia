@@ -24,7 +24,7 @@ if os.geteuid() == 0 or Path.home() != Path('/home/opc'):
     raise SystemExit('Utiliser la session opc habituelle, sans sudo devant python3.')
 os.umask(0o077)
 dest = Path(tempfile.mkdtemp(prefix='amazonia-resume-download-', dir=Path.home()))
-base = 'https://raw.githubusercontent.com/antoineacquaviva/Amazonia/0000000000000000000000000000000000000000/scripts/'
+base = 'https://raw.githubusercontent.com/antoineacquaviva/Amazonia/d1157e7cc8e37d500fcf700964e5b448e7dd2c89/scripts/'
 files = {
     'oracle-resume.py': 'c3fb44adc850a4a8813940da56cd13801f021e524db1324345384fe55c429358',
     'oracle-recover.py': '1d72a4a000034787c6eb1daa1169c53a3a253df3fa8e5ebe7fdfc9bc213fc366',
