@@ -1,3 +1,4 @@
+import { V4ProgramView } from "./V4ProgramView";
 import { V4ScienceView } from "./V4ScienceView";
 import React, { useEffect, useState } from "react";
 import { buildApiUrl } from "../api";
@@ -367,6 +368,6 @@ export function LegacyV4View() {
 }
 
 export function V4View(){
- const [mode,setMode]=useState('science');
- return <div className="space-y-4"><label>Version d’utilisation V4 <select className="border rounded p-2 bg-white text-slate-900" value={mode} onChange={e=>setMode(e.target.value)}><option value="science">Campagne scientifique durable</option><option value="legacy">Démonstration initiale à bot unique</option></select></label>{mode==='science'?<V4ScienceView/>:<LegacyV4View/>}</div>;
+ const [mode,setMode]=useState('program');
+ return <div className="space-y-4"><label>Version d’utilisation V4 <select className="border rounded p-2 bg-white text-slate-900" value={mode} onChange={e=>setMode(e.target.value)}><option value="program">Campagne comparative V4</option><option value="science">Campagne scientifique durable</option><option value="legacy">Démonstration initiale à bot unique</option></select></label>{mode==='program'?<V4ProgramView/>:mode==='science'?<V4ScienceView/>:<LegacyV4View/>}</div>;
 }

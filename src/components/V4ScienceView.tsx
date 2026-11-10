@@ -44,6 +44,7 @@ export function V4ScienceView() {
     [error, setError] = useState(""),
     [estimate, setEstimate] = useState<any>(null),
     [busy, setBusy] = useState(false),
+    [feedback, setFeedback] = useState(""),
     [configText, setConfigText] = useState("");
   const plan: Plan = {
     protocol: PROTOCOL,
@@ -120,7 +121,7 @@ export function V4ScienceView() {
       setError((e as Error).message);
     }
   };
-  const changed = () => setEstimate(null),
+  const changed = () => { setEstimate(null); setFeedback(""); },
     field = "border rounded p-2 bg-white text-slate-900";
   return (
     <section aria-label="Étude scientifique V4" className="space-y-5">
@@ -242,6 +243,7 @@ export function V4ScienceView() {
                 },
               ]);
               changed();
+              setFeedback("Configuration appliquée. Le plan contient cette seule configuration.");
             }}
           >
             Utiliser cette configuration seule
@@ -289,7 +291,7 @@ export function V4ScienceView() {
           </button>
         </div>
         <p>
-          Configurations retenues : {configs.length} (au plus 16). Longueur ≥
+          <span role="status">{feedback} </span>Configurations retenues : {configs.length} (au plus 16). Longueur ≥
           tours + 1 obligatoire ; les brouillons ne s’appliquent qu’après ajout
           ou remplacement.
         </p>
@@ -403,8 +405,9 @@ export function V4ScienceView() {
           disabled={!estimate || busy}
           onClick={start}
         >
-          Lancer le plan fixe
+          {busy ? "Lancement en cours…" : "Lancer le plan fixe"}
         </button>
+        {!estimate && <p>Estimer et vérifier le plan pour activer le lancement.</p>}
       </div>
       {error && (
         <p role="alert" className="text-red-700">

@@ -132,3 +132,25 @@ test("standard startup rejects scientific storage inside source before creating 
     assert.notEqual(code, 0);
     assert(!fs.existsSync(forbidden));
   }));
+
+test("guided launch through the protected prefix freezes coverage and survives restart", () =>
+  instance(true, async ({ base, key, start, ready }) => {
+    let server = start(); await ready(server);
+    const url = base+"/amazonia/api/v4/studies/programs";
+    const headers = {"X-Atelier-Internal":key,Origin:"https://atelierconceptionjeu.fr","Content-Type":"application/json"};
+    const id = "bd2a2da7-26ec-4fd5-9edf-a49a5d06f419";
+    const post = (path:string,body:unknown)=>fetch(url+path,{method:"POST",headers,body:JSON.stringify(body)});
+    assert.equal((await fetch(url)).status,403);
+    assert.equal((await post("",{id,repeats:2})).status,202);
+    assert.equal((await post("",{id,repeats:2})).status,202);
+    assert.equal((await (await fetch(url,{headers})).json()).length,1);
+    await stop(server);server=start();await ready(server);
+    const [p] = await (await fetch(url,{headers})).json();
+    assert.equal(p.status,"PAUSED");assert.equal(p.total,896);
+    assert.equal((await post("/"+id+"/resume",{})).status,200);
+    await wait(500);
+    const report=await (await fetch(url+"/"+id+"/export?detail=units",{headers})).json();
+    assert.equal(report.cells.length,448);
+    assert.equal(report.studies.flatMap((s:any)=>s?.samples ?? []).length,report.program.completed);
+    assert.equal(report.cells.reduce((n:number,c:any)=>n+c.observed+c.missing,0),896);
+  }));

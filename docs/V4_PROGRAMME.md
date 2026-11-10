@@ -1,0 +1,11 @@
+# Campagne comparative V4
+
+Ouvrir Amazonia, choisir le nombre de parties par combinaison puis lancer la campagne comparative. La VM enchaîne les études. Le navigateur peut être fermé. Après un redémarrage serveur, reprendre explicitement le programme. Les études ciblées restent accessibles par le sélecteur V4.
+
+Le protocole V4_TABLES_1 fige 448 cellules : les huit variantes, quatre effectifs (3 à 6), deux stocks initiaux et sept familles homogènes. Il fixe huit tours, seize positions et un ordre initial par effectif. Les répétitions proposées (2, 32, 128) représentent respectivement 896, 14 336 et 57 344 parties. La première profondeur sert à vérifier le parcours. La limite de chaque étude est respectée en partitionnant les graines communes. Le manifeste, les résultats unitaires et les points de reprise sont conservés dans le stockage scientifique habituel.
+
+Le bilan IA contient les données de toutes les cellules prévues, leurs effectifs et manques, les pertes, les gains appariés par rapport à SOLO_INFORMED, les révisions et des parties témoins. Un intervalle marginal à 95 % selon Hoeffding suppose l’indépendance entre parties et le plan fixe achevé. Les chiffres de coopération et de simplicité décrivent des comportements de bots. Les résultats de la famille omnisciente doivent être interprétés séparément. Le contrôle des comparaisons multiples, les équipes mixtes, les confirmations indépendantes et l’arrêt adaptatif restent à développer.
+
+Transmettre le bilan compact à l’IA. Pour réimporter sa proposition dans le programme terminé, utiliser un objet JSON contenant programId, variant (identifiants exacts du bilan), rationale, alternatives et limits. Présenter le raisonnement et citer les résultats à l’appui. L’application conserve cette proposition et permet d’examiner les règles correspondantes et la chronologie d’une partie. Le fichier détaillé contient les mesures et événements individuels pour une analyse complémentaire.
+
+Avant mise à jour d’une instance : terminer les études en cours qui devront rester exécutables sur leur version d’origine, sauvegarder le répertoire scientifique via le mécanisme existant et conserver le code associé. Le contrôle de provenance peut refuser la reprise après changement de version. Estimer les besoins disque et la durée sur la VM avec le premier programme.

@@ -53,6 +53,7 @@ try {
   await page
     .getByRole("link", { name: "V4 expérimentale", exact: true })
     .click();
+  await page.getByLabel("Version d’utilisation V4").selectOption("science");
   await page
     .getByRole("heading", { name: "Campagne V4 durable — sept familles" })
     .waitFor();
@@ -98,6 +99,7 @@ try {
   await page
     .getByRole("link", { name: "V4 expérimentale", exact: true })
     .click();
+  await page.getByLabel("Version d’utilisation V4").selectOption("science");
   await page
     .getByRole("button", { name: /Étude V4 ciblée · COMPLETED · 14\/14/ })
     .click();
@@ -144,6 +146,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator("select").first().selectOption("dashboard");
   await page.locator("select").first().selectOption("v4");
+  await page.getByLabel("Version d’utilisation V4").selectOption("science");
   await page
     .getByRole("heading", { name: "Campagne V4 durable — sept familles" })
     .waitFor();

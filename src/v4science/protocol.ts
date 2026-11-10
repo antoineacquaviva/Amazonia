@@ -124,6 +124,8 @@ export function provenance(): Provenance {
       "src/v4science/runner.ts",
       "src/v4science/measures.ts",
       "src/v4science/statistics.ts",
+      "src/v4science/program.ts",
+      "src/v4science/programReport.ts",
       "src/v4science/manager.ts",
       "src/v4science/routes.ts",
       "src/v4science/backup.ts",
